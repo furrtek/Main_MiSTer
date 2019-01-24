@@ -173,6 +173,11 @@ char is_zx81_core()
 	return !strcasecmp(core_name, "zx81");
 }
 
+char is_neogeo_core()
+{
+	return !strcasecmp(core_name, "neogeo");
+}
+
 static int is_no_type = 0;
 static int disable_osd = 0;
 char has_menu()

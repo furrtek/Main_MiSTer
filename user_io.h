@@ -199,6 +199,7 @@ const char *user_io_get_core_name_ex();
 char is_menu_core();
 char is_x86_core();
 char is_snes_core();
+char is_neogeo_core();
 char has_menu();
 
 int user_io_get_kbdemu();

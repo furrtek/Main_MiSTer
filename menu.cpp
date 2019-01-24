@@ -1251,7 +1251,11 @@ void HandleUI(void)
 
 	case MENU_8BIT_MAIN_FILE_SELECTED:
 		printf("File selected: %s\n", SelectedPath);
-		user_io_file_tx(SelectedPath, user_io_ext_idx(SelectedPath, fs_pFileExt) << 6 | (menusub + 1), opensave);
+		if (is_neogeo_core()) {
+			neogeo_romset_tx(SelectedPath);
+		} else {
+			user_io_file_tx(SelectedPath, user_io_ext_idx(SelectedPath, fs_pFileExt) << 6 | (menusub + 1), opensave);
+		}
 		menustate = MENU_NONE1;
 		break;
 
@@ -1364,7 +1368,6 @@ void HandleUI(void)
 				SelectFile(0, SCANO_CORES, MENU_FIRMWARE_CORE_FILE_SELECTED1, MENU_8BIT_SYSTEM1);
 				menusub = 0;
 				break;
-
 			case 1:
 				if (is_minimig())
 				{
@@ -1381,13 +1384,11 @@ void HandleUI(void)
 				menustate = MENU_JOYDIGMAP;
 				menusub = 0;
 				break;
-
 			case 2:
 				start_map_setting(-1);
 				menustate = MENU_JOYKBDMAP;
 				menusub = 0;
 				break;
-
 			case 3:
 				{
 					menustate = MENU_UART1;
@@ -1399,7 +1400,7 @@ void HandleUI(void)
 					menusub = ((mode != 3 && mode != 4) || !stat("/dev/midi", &filestat)) ? 0 : 2;
 				}
 				break;
-                                				
+			       				
 			case 5:
 				user_io_set_scaler_flt(user_io_get_scaler_flt() ? 0 : 1);
 				menustate = MENU_8BIT_SYSTEM1;
@@ -1425,7 +1426,6 @@ void HandleUI(void)
                     menusub   = 0;
 				}
 				break;
-
 			case 8:
 				// Save settings
 				menustate = MENU_8BIT_MAIN1;
@@ -1449,7 +1449,6 @@ void HandleUI(void)
 					if (is_x86_core()) x86_config_save();
 				}
 				break;
-
 			case 9:
 				{
 					reboot_req = 1;
@@ -1462,12 +1461,10 @@ void HandleUI(void)
 					OsdWrite(cr, p, menusub == 8, 0);
 				}
 				break;
-
 			case 10:
 				menustate = MENU_8BIT_ABOUT1;
 				menusub = 0;
 				break;
-
 			default:
 				menustate = MENU_NONE1;
 				break;

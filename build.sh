@@ -2,7 +2,7 @@
 
 # create simple text file named 'host' in this folder with IP address of your MiSTer.
 
-HOST=192.168.1.75
+HOST=192.168.1.200
 [ -f host ] && HOST=$(cat host)
 
 # make script fail if any command failed,

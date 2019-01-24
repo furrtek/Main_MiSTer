@@ -1,8 +1,12 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Debug|Win32">
-      <Configuration>Debug</Configuration>
+    <ProjectConfiguration Include="Release|ARM">
+      <Configuration>Release</Configuration>
+      <Platform>ARM</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
       <Platform>Win32</Platform>
     </ProjectConfiguration>
   </ItemGroup>
@@ -11,7 +15,12 @@
     <Keyword>MakeFileProj</Keyword>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v140</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'" Label="Configuration">
     <ConfigurationType>Makefile</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v140</PlatformToolset>
@@ -21,11 +30,14 @@
   </ImportGroup>
   <ImportGroup Label="Shared">
   </ImportGroup>
-  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'" Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <NMakeBuildCommandLine>git.lnk ./build.sh</NMakeBuildCommandLine>
     <NMakeOutput>MiSTer</NMakeOutput>
     <NMakeCleanCommandLine>git.lnk ./clean.sh</NMakeCleanCommandLine>
@@ -33,12 +45,26 @@
     <NMakeIncludeSearchPath>c:\Work\Git\opt\gcc54\arm-linux-gnueabihf\libc\usr\include;c:\Work\Git\opt\gcc54\lib\gcc\arm-linux-gnueabihf\5.4.1\include;c:\Work\Git\opt\gcc54\arm-linux-gnueabihf\include\c++\5.4.1;$(NMakeIncludeSearchPath);lib\libco;lib\miniz</NMakeIncludeSearchPath>
     <OutDir>$(TEMP)</OutDir>
     <IntDir>$(TEMP)</IntDir>
-    <AdditionalOptions>
-    </AdditionalOptions>
+    <AdditionalOptions />
     <IncludePath />
     <ReferencePath />
     <LibraryPath />
     <LibraryWPath />
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">
+    <AdditionalOptions />
+    <IncludePath>D:\gcc-linaro-7.3.1-2018.05-i686-mingw32_arm-linux-gnueabihf\arm-linux-gnueabihf\libc\usr\include;$(IncludePath)</IncludePath>
+    <ReferencePath />
+    <LibraryPath>D:\gcc-linaro-7.3.1-2018.05-i686-mingw32_arm-linux-gnueabihf\lib;$(LibraryPath)</LibraryPath>
+    <LibraryWPath />
+    <NMakeBuildCommandLine>make</NMakeBuildCommandLine>
+    <NMakeOutput>MiSTer</NMakeOutput>
+    <NMakeCleanCommandLine>clean.sh</NMakeCleanCommandLine>
+    <NMakePreprocessorDefinitions>__arm__;__GNUC__;__USE_GNU ;_GNU_SOURCE;VDATE="000000";_FILE_OFFSET_BITS=64;_LARGEFILE64_SOURCE;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
+    <NMakeIncludeSearchPath>c:\Work\Git\opt\gcc54\arm-linux-gnueabihf\libc\usr\include;c:\Work\Git\opt\gcc54\lib\gcc\arm-linux-gnueabihf\5.4.1\include;c:\Work\Git\opt\gcc54\arm-linux-gnueabihf\include\c++\5.4.1;$(NMakeIncludeSearchPath);lib\libco;lib\miniz</NMakeIncludeSearchPath>
+    <SourcePath />
+    <ExcludePath />
+    <ExecutablePath>D:\gcc-linaro-7.3.1-2018.05-i686-mingw32_arm-linux-gnueabihf\bin;$(ExecutablePath)</ExecutablePath>
   </PropertyGroup>
   <ItemDefinitionGroup>
   </ItemDefinitionGroup>
