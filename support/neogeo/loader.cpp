@@ -2,8 +2,10 @@
 // (C) 2019 Sean 'furrtek' Gonsalves
 
 #include <string.h>
+#include <stdlib.h>
 #include "graphics.h"
 #include "loader.h"
+#include "../../sxmlc.h"
 #include "../../user_io.h"
 #include "../../osd.h"
 
@@ -22,8 +24,6 @@ int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_
 	strcat(name_buf, name);
 
 	if (!FileOpen(&f, name_buf, 0)) return 0;
-	
-	//unsigned long bytes2send = f.size;
 
 	FileSeek(&f, offset, SEEK_SET);
 
@@ -84,9 +84,66 @@ int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_
 	return 1;
 }
 
+static int xml_parse(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, const int n, SAX_Data* sd)
+{
+	const char* romset = (const char*)sd->user;
+	static char file_name[16 + 1] { "" };
+	static int in_correct_romset = 0;
+	static int in_file = 0;
+	static unsigned int file_type = 0, file_index = 0;
+	static unsigned long int file_start = 0, file_size = 0;
+
+	switch (evt)
+	{
+	case XML_EVENT_START_NODE:
+		if (!strcasecmp(node->tag, "romset")) {
+			if (!strcasecmp(node->attributes[0].value, romset)) {
+				printf("Romset %s found !\n", romset);
+				in_correct_romset = 1;
+			} else {
+				in_correct_romset = 0;
+			}
+		}
+		if (in_correct_romset) {
+			if (!strcasecmp(node->tag, "file")) {
+				for (int i = 0; i < node->n_attributes; i++) {
+					if (!strcasecmp(node->attributes[i].name, "name"))
+						strncpy(file_name, node->attributes[i].value, 16);
+					if (!strcasecmp(node->attributes[i].name, "type")) file_type = atoi(node->attributes[i].value);
+					if (!strcasecmp(node->attributes[i].name, "index")) file_index = atoi(node->attributes[i].value);
+					if (!strcasecmp(node->attributes[i].name, "start")) file_start = strtol(node->attributes[i].value, NULL, 0);
+					if (!strcasecmp(node->attributes[i].name, "size")) file_size = strtol(node->attributes[i].value, NULL, 0);
+				}
+				in_file = 1;
+			}
+		}
+		break;
+
+	case XML_EVENT_END_NODE:
+		if (in_correct_romset) {
+			if (!strcasecmp(node->tag, "romset")) {
+				return 0;
+			} else if (!strcasecmp(node->tag, "file")) {
+				if (in_file)
+					neogeo_file_tx(romset, file_name, file_type, file_index, file_start, file_size);
+				in_file = 0;
+			}
+		}
+		break;
+
+	case XML_EVENT_ERROR:
+		printf("XML parse: %s: ERROR %d\n", text, n);
+		break;
+	default:
+		break;
+	}
+
+	return true;
+}
+
 int neogeo_romset_tx(char* name) {
 	char romset[8 + 1];
-	//unsigned int i;
+	static char full_path[1024];
 
 	memset(romset, 0, sizeof(romset));
 
@@ -97,77 +154,17 @@ int neogeo_romset_tx(char* name) {
 	p = strrchr(name, '/');
 	if (!p) return 0;
 	strncpy(romset, p + 1, strlen(p + 1));
-	
+
+	sprintf(full_path, "%s/neogeo/romsets.xml", getRootDir());
+
 	user_io_8bit_set_status(1, 1);	// Maintain reset
 
-	/*unsigned int entry_count = sizeof romset_defs / sizeof romset_defs[0];
-	for (i = 0; i < entry_count; i++) {
-		if (!strcmp(romset_defs[i].name, romset))
-			break;
-	}
-	if (i == entry_count)
-		return 0;
+	SAX_Callbacks sax;
+	SAX_Callbacks_init(&sax);
+	sax.all_event = xml_parse;
+	XMLDoc_parse_file_SAX(full_path, &sax, romset);
 
-	printf("Loading romset %s...\n", romset);
-	
-	unsigned int file_count = romset_defs[i].file_count;
-	for (unsigned int j = 0; j < file_count ; j++) {
-		OsdWrite(last_osd_line, romset_defs[i].file_list[j].name, 0, 0);
-		neogeo_file_tx(&romset_defs[i].file_list[j]);
-	}*/
-	
 	neogeo_file_tx("", "neo-epo.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
-	
-	if (!strcmp(romset, "eightman")) {
-		neogeo_file_tx(romset, "025-p1.p1", NEO_FILE_RAW, 1, 0, 0x80000);
-		neogeo_file_tx(romset, "025-s1.s1", NEO_FILE_FIX, 3, 0, 0x20000);
-		neogeo_file_tx(romset, "025-c1.c1", NEO_FILE_SPR, 32 + (0 << 1) + 1, 0, 0x100000);		neogeo_file_tx(romset, "025-c2.c2", NEO_FILE_SPR, 32 + (0 << 1) + 0, 0, 0x100000);
-		neogeo_file_tx(romset, "025-c3.c3", NEO_FILE_SPR, 32 + (2 << 1) + 1, 0, 0x80000);		neogeo_file_tx(romset, "025-c4.c4", NEO_FILE_SPR, 32 + (2 << 1) + 0, 0, 0x80000);
-	} else if (!strcmp(romset, "lbowling")) {
-		neogeo_file_tx(romset, "019-p1.p1", NEO_FILE_RAW, 1, 0, 0x80000);
-		neogeo_file_tx(romset, "019-s1.s1", NEO_FILE_FIX, 3, 0, 0x20000);
-		neogeo_file_tx(romset, "019-c1.c1", NEO_FILE_SPR, 32 + (0 << 1) + 1, 0, 0x80000);		neogeo_file_tx(romset, "019-c2.c2", NEO_FILE_SPR, 32 + (0 << 1) + 0, 0, 0x80000);
-	} else if (!strcmp(romset, "lresort")) {
-		neogeo_file_tx(romset, "024-p1.p1", NEO_FILE_RAW, 1, 0, 0x80000);
-		neogeo_file_tx(romset, "024-s1.s1", NEO_FILE_FIX, 3, 0, 0x20000);
-		neogeo_file_tx(romset, "024-c1.c1", NEO_FILE_SPR, 32 + (0 << 1) + 1, 0, 0x100000);		neogeo_file_tx(romset, "024-c2.c2", NEO_FILE_SPR, 32 + (0 << 1) + 0, 0, 0x100000);
-		neogeo_file_tx(romset, "024-c3.c3", NEO_FILE_SPR, 32 + (2 << 1) + 1, 0, 0x80000);		neogeo_file_tx(romset, "024-c4.c4", NEO_FILE_SPR, 32 + (2 << 1) + 0, 0, 0x80000);
-	} else if (!strcmp(romset, "mslug")) {
-		neogeo_file_tx(romset, "201-p1.p1", NEO_FILE_RAW, 1, 0x100000, 0x100000 );
-		neogeo_file_tx(romset, "201-p1.p1", NEO_FILE_RAW, 2, 0, 0x100000 );
-		neogeo_file_tx(romset, "201-s1.s1", NEO_FILE_FIX, 3, 0, 0x20000 );
-		neogeo_file_tx(romset, "201-c1.c1", NEO_FILE_SPR, 32 + (0 << 1) + 1, 0, 0x400000 );		neogeo_file_tx(romset, "201-c2.c2", NEO_FILE_SPR, 32 + (0 << 1) + 0, 0, 0x400000 );
-		neogeo_file_tx(romset, "201-c3.c3", NEO_FILE_SPR, 32 + (8 << 1) + 1, 0, 0x400000 );		neogeo_file_tx(romset, "201-c4.c4", NEO_FILE_SPR, 32 + (8 << 1) + 0, 0, 0x400000 );
-	} else if (!strcmp(romset, "nam1975")) {
-		neogeo_file_tx(romset, "001-p1.p1", NEO_FILE_RAW, 1, 0, 0x80000);
-		neogeo_file_tx(romset, "001-s1.s1", NEO_FILE_FIX, 3, 0, 0x20000);
-		neogeo_file_tx(romset, "001-c1.c1", NEO_FILE_SPR, 32 + (0 << 1) + 1, 0, 0x80000);		neogeo_file_tx(romset, "001-c2.c2", NEO_FILE_SPR, 32 + (0 << 1) + 0, 0, 0x80000);
-		neogeo_file_tx(romset, "001-c3.c3", NEO_FILE_SPR, 32 + (1 << 1) + 1, 0, 0x80000);		neogeo_file_tx(romset, "001-c4.c4", NEO_FILE_SPR, 32 + (1 << 1) + 0, 0, 0x80000);
-		neogeo_file_tx(romset, "001-c5.c5", NEO_FILE_SPR, 32 + (2 << 1) + 1, 0, 0x80000);		neogeo_file_tx(romset, "001-c6.c6", NEO_FILE_SPR, 32 + (2 << 1) + 0, 0, 0x80000);
-	} else if (!strcmp(romset, "ncombat")) {
-		neogeo_file_tx(romset, "009-p1.p1", NEO_FILE_RAW, 1, 0, 0x80000 );
-		neogeo_file_tx(romset, "009-s1.s1", NEO_FILE_FIX, 3, 0, 0x20000 );
-		neogeo_file_tx(romset, "009-c1.c1", NEO_FILE_SPR, 32 + (0 << 1) + 1, 0, 0x80000 );		neogeo_file_tx(romset, "009-c2.c2", NEO_FILE_SPR, 32 + (0 << 1) + 0, 0, 0x80000 );
-		neogeo_file_tx(romset, "009-c3.c3", NEO_FILE_SPR, 32 + (1 << 1) + 1, 0, 0x80000 );		neogeo_file_tx(romset, "009-c4.c4", NEO_FILE_SPR, 32 + (1 << 1) + 0, 0, 0x80000 );
-		neogeo_file_tx(romset, "009-c5.c5", NEO_FILE_SPR, 32 + (2 << 1) + 1, 0, 0x80000 );		neogeo_file_tx(romset, "009-c6.c6", NEO_FILE_SPR, 32 + (2 << 1) + 0, 0, 0x80000 );
-	} else if (!strcmp(romset, "neobombe")) {
-		neogeo_file_tx(romset, "093-p1.p1", NEO_FILE_RAW, 1, 0, 0x100000 );
-		neogeo_file_tx(romset, "093-s1.s1", NEO_FILE_FIX, 3, 0, 0x20000 );
-		neogeo_file_tx(romset, "093-c1.c1", NEO_FILE_SPR, 32 + (0 << 1) + 1, 0, 0x400000 );		neogeo_file_tx(romset, "093-c2.c2", NEO_FILE_SPR, 32 + (0 << 1) + 0, 0, 0x400000 );
-		neogeo_file_tx(romset, "093-c3.c3", NEO_FILE_SPR, 32 + (8 << 1) + 1, 0, 0x80000 );		neogeo_file_tx(romset, "093-c4.c4", NEO_FILE_SPR, 32 + (8 << 1) + 0, 0, 0x80000 );
-	} else if (!strcmp(romset, "panicbom")) {
-		neogeo_file_tx(romset, "073-p1.p1", NEO_FILE_RAW, 1, 0, 0x80000 );
-		neogeo_file_tx(romset, "073-s1.s1", NEO_FILE_FIX, 3, 0, 0x20000 );
-		neogeo_file_tx(romset, "073-c1.c1", NEO_FILE_SPR, 32 + (0 << 1) + 1, 0, 0x100000 );		neogeo_file_tx(romset, "073-c2.c2", NEO_FILE_SPR, 32 + (0 << 1) + 0, 0, 0x100000 );
-	} else if (!strcmp(romset, "pbobblen")) {
-		neogeo_file_tx(romset, "d96-07.ep1", NEO_FILE_RAW, 1, 0, 0x80000 );
-		neogeo_file_tx(romset, "d96-04.s1", NEO_FILE_FIX, 3, 0, 0x20000 );
-		neogeo_file_tx(romset, "d96-02.c5", NEO_FILE_SPR, 32 + (4 << 1) + 1, 0, 0x80000 );		neogeo_file_tx(romset, "d96-03.c6", NEO_FILE_SPR, 32 + (4 << 1) + 0, 0, 0x80000 );
-	} else if (!strcmp(romset, "puzzledp")) {
-		neogeo_file_tx(romset, "202-p1.p1", NEO_FILE_RAW, 1, 0, 0x80000 );
-		neogeo_file_tx(romset, "202-s1.s1", NEO_FILE_FIX, 3, 0, 0x20000 );
-		neogeo_file_tx(romset, "202-c1.c1", NEO_FILE_SPR, 32 + (0 << 1) + 1, 0, 0x100000 );		neogeo_file_tx(romset, "202-c2.c2", NEO_FILE_SPR, 32 + (0 << 1) + 0, 0, 0x100000 );
-	}
 
 	user_io_8bit_set_status(0, 1);	// Release reset
 
