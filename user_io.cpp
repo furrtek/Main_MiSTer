@@ -1906,6 +1906,13 @@ void user_io_poll()
 		}
 	}
 
+	if (is_neogeo_core() && (!rtc_timer || CheckTimer(rtc_timer)))
+	{
+		// Update once per minute should be enough
+		rtc_timer = GetTimer(60000);
+		send_rtc(1);
+	}
+
 	if (core_type == CORE_TYPE_ARCHIE) archie_poll();
 	if (core_type == CORE_TYPE_SHARPMZ) sharpmz_poll();
 

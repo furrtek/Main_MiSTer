@@ -1,4 +1,4 @@
 #include "../../file_io.h"
 
-int spr_convert(fileTYPE *f);
-int fix_convert(fileTYPE *f);
+void spr_convert(uint8_t* buf_in, uint8_t* buf_out, unsigned int size);
+void fix_convert(uint8_t* buf_in, uint8_t* buf_out, unsigned int size);

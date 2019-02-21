@@ -3,18 +3,40 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include "graphics.h"
 #include "loader.h"
 #include "../../sxmlc.h"
 #include "../../user_io.h"
 #include "../../osd.h"
 
-int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_type, unsigned char index, unsigned long offset, unsigned long bytes2send)
+void neogeo_osd_progress(const char* name, unsigned int progress) {
+	char progress_buf[30 + 1];
+
+	// OSD width - width of white bar on the left - max width of file name = 32 - 2 - 11 - 1 = 18
+	progress = (progress * 18) >> 8;
+	if (progress >= 18) progress = 18;
+
+	// ##############################
+	// NNNNNNNNNNN-PPPPPPPPPPPPPPPPPP
+	memset(progress_buf, ' ', 30);
+	memcpy(progress_buf, name, strlen(name));
+	for (unsigned int i = 0; i < progress; i++)
+		progress_buf[12 + i] = '#';
+	progress_buf[30] = 0;
+
+	OsdWrite(OsdGetSize() - 1, progress_buf, 0);
+}
+
+int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_type, unsigned char index, unsigned long offset, unsigned long size)
 {
 	fileTYPE f = {};
-	static uint8_t buf[4096];
+	uint8_t buf[4096];	// Same in user_io_file_tx
+	uint8_t buf_out[4096];
 	static char name_buf[256];
-	int last_osd_line = OsdGetSize() - 1;
+	unsigned long bytes2send = size;
+
+	if (!bytes2send) return 0;
 
 	strcpy(name_buf, "/media/fat/NeoGeo/");
 	if (strlen(romset)) {
@@ -27,10 +49,10 @@ int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_
 
 	FileSeek(&f, offset, SEEK_SET);
 
-	// transmit the entire file using one transfer
-	OsdWrite(last_osd_line, name, 0, 0);
-	printf("Loading file %s (start %lu, size %lu, type %u) with index 0x%02X\n", name, offset, bytes2send, neo_file_type, index);
+	printf("Loading %s (offset %lu, size %lu, type %u) with index 0x%02X\n", name, offset, bytes2send, neo_file_type, index);
 
+	// Put pairs of bitplanes in the correct order for the core
+	if (neo_file_type == NEO_FILE_SPR) index ^= 1;
 	// set index byte
 	user_io_set_index(index);
 
@@ -40,36 +62,32 @@ int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_
 	spi8(0xff);
 	DisableFpga();
 	
-	if (neo_file_type == NEO_FILE_FIX)
+	while (bytes2send)
 	{
+		uint16_t chunk = (bytes2send > sizeof(buf)) ? sizeof(buf) : bytes2send;
+
+		FileReadAdv(&f, buf, chunk);
+		
 		EnableFpga();
 		spi8(UIO_FILE_TX_DAT);
-		fix_convert(&f);
-		DisableFpga();
-	}
-	else if (neo_file_type == NEO_FILE_SPR)
-	{
-		EnableFpga();
-		spi8(UIO_FILE_TX_DAT);
-		spr_convert(&f);
-		DisableFpga();
-	} else {
-		while (bytes2send)
-		{
-			printf(".");
 
-			uint16_t chunk = (bytes2send > sizeof(buf)) ? sizeof(buf) : bytes2send;
-
-			FileReadAdv(&f, buf, chunk);
-
-			EnableFpga();
-			spi8(UIO_FILE_TX_DAT);
+		if (neo_file_type == NEO_FILE_RAW) {
 			spi_write(buf, chunk, 1);
-			DisableFpga();
-
-			bytes2send -= chunk;
+		} else if (neo_file_type == NEO_FILE_8BIT) {
+			spi_write(buf, chunk, 0);
+		} else {
+			if (neo_file_type == NEO_FILE_FIX)
+				fix_convert(buf, buf_out, sizeof(buf_out));
+			else if (neo_file_type == NEO_FILE_SPR)
+				spr_convert(buf, buf_out, sizeof(buf_out));
+			
+			spi_write(buf_out, chunk, 1);
 		}
-		printf("\n");
+
+		DisableFpga();
+
+		neogeo_osd_progress(name, 256 - ((bytes2send << 8) / size));
+		bytes2send -= chunk;
 	}
 
 	FileClose(&f);
@@ -79,7 +97,6 @@ int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_
 	spi8(UIO_FILE_TX);
 	spi8(0x00);
 	DisableFpga();
-	printf("\n");
 
 	return 1;
 }
@@ -90,8 +107,9 @@ static int xml_parse(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, const i
 	static char file_name[16 + 1] { "" };
 	static int in_correct_romset = 0;
 	static int in_file = 0;
-	static unsigned int file_type = 0, file_index = 0;
-	static unsigned long int file_start = 0, file_size = 0;
+	static unsigned char file_index = 0;
+	static char file_type = 0;
+	static unsigned long int file_offset= 0, file_size = 0;
 
 	switch (evt)
 	{
@@ -109,10 +127,27 @@ static int xml_parse(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, const i
 				for (int i = 0; i < node->n_attributes; i++) {
 					if (!strcasecmp(node->attributes[i].name, "name"))
 						strncpy(file_name, node->attributes[i].value, 16);
-					if (!strcasecmp(node->attributes[i].name, "type")) file_type = atoi(node->attributes[i].value);
-					if (!strcasecmp(node->attributes[i].name, "index")) file_index = atoi(node->attributes[i].value);
-					if (!strcasecmp(node->attributes[i].name, "start")) file_start = strtol(node->attributes[i].value, NULL, 0);
-					if (!strcasecmp(node->attributes[i].name, "size")) file_size = strtol(node->attributes[i].value, NULL, 0);
+
+					if (!strcasecmp(node->attributes[i].name, "type")) {
+						file_type = *node->attributes[i].value;
+						if (file_type == 'S')
+							file_type = NEO_FILE_FIX;
+						else if (file_type == 'C')
+							file_type = NEO_FILE_SPR;
+						else if (file_type == 'M')
+							file_type = NEO_FILE_8BIT;
+						else
+							file_type = NEO_FILE_RAW;
+					}
+
+					if (!strcasecmp(node->attributes[i].name, "index"))
+						file_index = atoi(node->attributes[i].value);
+
+					if (!strcasecmp(node->attributes[i].name, "offset"))
+						file_offset = strtol(node->attributes[i].value, NULL, 0);
+
+					if (!strcasecmp(node->attributes[i].name, "size"))
+						file_size = strtol(node->attributes[i].value, NULL, 0);
 				}
 				in_file = 1;
 			}
@@ -125,7 +160,7 @@ static int xml_parse(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, const i
 				return 0;
 			} else if (!strcasecmp(node->tag, "file")) {
 				if (in_file)
-					neogeo_file_tx(romset, file_name, file_type, file_index, file_start, file_size);
+					neogeo_file_tx(romset, file_name, file_type, file_index, file_offset, file_size);
 				in_file = 0;
 			}
 		}
@@ -143,11 +178,12 @@ static int xml_parse(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, const i
 
 int neogeo_romset_tx(char* name) {
 	char romset[8 + 1];
+	int arcade_mode;
 	static char full_path[1024];
 
 	memset(romset, 0, sizeof(romset));
 
-	// Get romset name from path (current directory)
+	// Get romset name from path (which should point to a .p1 or .ep1 file)
 	char *p = strrchr(name, '/');
 	if (!p) return 0;
 	*p = 0;
@@ -155,16 +191,39 @@ int neogeo_romset_tx(char* name) {
 	if (!p) return 0;
 	strncpy(romset, p + 1, strlen(p + 1));
 
-	sprintf(full_path, "%s/neogeo/romsets.xml", getRootDir());
-
 	user_io_8bit_set_status(1, 1);	// Maintain reset
 
+	// Look for the romset's file list in romsets.xml
+	sprintf(full_path, "%s/neogeo/romsets.xml", getRootDir());
 	SAX_Callbacks sax;
 	SAX_Callbacks_init(&sax);
 	sax.all_event = xml_parse;
 	XMLDoc_parse_file_SAX(full_path, &sax, romset);
 
-	neogeo_file_tx("", "neo-epo.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
+	// Load system ROMs
+	arcade_mode = (user_io_8bit_set_status(0, 0) >> 1) & 1;
+	
+	struct stat64 st;
+	sprintf(full_path, "%s/neogeo/uni-bios.rom", getRootDir());
+	if (!stat64(full_path, &st)) {
+		neogeo_file_tx("", "uni-bios.rom", NEO_FILE_RAW, 0, 0, 0x20000);
+	} else {
+		if (arcade_mode)
+			neogeo_file_tx("", "sp-s2.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
+		else
+			neogeo_file_tx("", "neo-epo.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
+	}
+	neogeo_file_tx("", "000-lo.lo", NEO_FILE_8BIT, 1, 0, 0x10000);
+	neogeo_file_tx("", "sfix.sfix", NEO_FILE_FIX, 2, 0, 0x10000);
+
+	if (!strcmp(romset, "ssideki") || !strcmp(romset, "fatfury2")) {
+		printf("Enabled PRO-CT0 protection chip\n");
+		user_io_8bit_set_status(0x01000000, 0x01000000);
+	} else
+		user_io_8bit_set_status(0x00000000, 0x01000000);
+
+	FileGenerateSavePath(name, (char*)full_path);
+	user_io_file_mount((char*)full_path, 0, 1);
 
 	user_io_8bit_set_status(0, 1);	// Release reset
 
