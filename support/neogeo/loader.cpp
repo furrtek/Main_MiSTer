@@ -221,6 +221,18 @@ int neogeo_romset_tx(char* name) {
 		user_io_8bit_set_status(0x01000000, 0x01000000);
 	} else
 		user_io_8bit_set_status(0x00000000, 0x01000000);
+	
+	if (!strcmp(romset, "kof95")) {
+		printf("Enabled sprite gfx gap hack for kof95\n");
+		user_io_8bit_set_status(0x10000000, 0x30000000);
+	} else if (!strcmp(romset, "whp")) {
+		printf("Enabled sprite gfx gap hack for whp\n");
+		user_io_8bit_set_status(0x20000000, 0x30000000);
+	} else if (!strcmp(romset, "kizuna")) {
+		printf("Enabled sprite gfx gap hack for kizuna\n");
+		user_io_8bit_set_status(0x30000000, 0x30000000);
+	} else 
+		user_io_8bit_set_status(0x00000000, 0x30000000);
 
 	FileGenerateSavePath(name, (char*)full_path);
 	user_io_file_mount((char*)full_path, 0, 1);
