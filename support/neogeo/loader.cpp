@@ -218,9 +218,12 @@ int neogeo_romset_tx(char* name) {
 
 	if (!strcmp(romset, "ssideki") || !strcmp(romset, "fatfury2")) {
 		printf("Enabled PRO-CT0 protection chip\n");
-		user_io_8bit_set_status(0x01000000, 0x01000000);
+		user_io_8bit_set_status(0x01000000, 0x03000000);
+	} else if (!strcmp(romset, "ridhero")) {
+		printf("Enabled COM MCU for ridhero\n");
+		user_io_8bit_set_status(0x02000000, 0x03000000);
 	} else
-		user_io_8bit_set_status(0x00000000, 0x01000000);
+		user_io_8bit_set_status(0x00000000, 0x03000000);
 	
 	if (!strcmp(romset, "kof95")) {
 		printf("Enabled sprite gfx gap hack for kof95\n");
