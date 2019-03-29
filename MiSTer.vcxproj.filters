@@ -127,6 +127,12 @@
     <ClCompile Include="lib\miniz\miniz_zip.c">
       <Filter>Source Files\miniz</Filter>
     </ClCompile>
+    <ClCompile Include="bootcore.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="charrom.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="battery.h">
@@ -257,6 +263,9 @@
     </ClInclude>
     <ClInclude Include="lib\miniz\miniz_zip.h">
       <Filter>Header Files\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="bootcore.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

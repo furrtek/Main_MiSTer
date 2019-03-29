@@ -972,7 +972,7 @@ typedef struct
 {
 	uint16_t vid, pid;
 	uint8_t  led;
-	uint8_t  last_x, last_y; // last x & y axis bitmasks for each alternative directional control scheme (DPAD, Analog pad etc.)
+	uint8_t  axis_state[256];
 
 	uint8_t  num;
 	uint8_t  has_map;
@@ -990,6 +990,8 @@ typedef struct
 
 static devInput input[NUMDEV] = {};
 
+#define BTN_NUM (sizeof(devInput::map) / sizeof(devInput::map[0]))
+
 int mfd = -1;
 int mwd = -1;
 
@@ -1003,8 +1005,7 @@ static int set_watch()
 		return -1;
 	}
 
-	mwd = inotify_add_watch(mfd, "/dev/input",
-		IN_MODIFY | IN_CREATE | IN_DELETE);
+	mwd = inotify_add_watch(mfd, "/dev/input", IN_MODIFY | IN_CREATE | IN_DELETE);
 
 	if (mwd < 0)
 	{
@@ -1141,6 +1142,9 @@ static int mapping_type;
 static int mapping_count;
 static uint8_t mapping_key;
 
+static uint32_t tmp_axis[4];
+static int tmp_axis_n = 0;
+
 void start_map_setting(int cnt)
 {
 	mapping_button = 0;
@@ -1148,6 +1152,10 @@ void start_map_setting(int cnt)
 	mapping_dev = -1;
 	mapping_type = (cnt<0) ? 3 : cnt ? 1 : 2;
 	mapping_count = cnt;
+	tmp_axis_n = 0;
+
+	if (mapping_type <= 1 && is_menu_core()) mapping_button = -6;
+	memset(tmp_axis, 0, sizeof(tmp_axis));
 }
 
 int get_map_button()
@@ -1163,8 +1171,8 @@ int get_map_type()
 static char *get_map_name(int dev, int def)
 {
 	static char name[128];
-	if (def || is_menu_core()) sprintf(name, "input_%04x_%04x.map", input[dev].vid, input[dev].pid);
-	else sprintf(name, "%s_input_%04x_%04x.map", user_io_get_core_name_ex(), input[dev].vid, input[dev].pid);
+	if (def || is_menu_core()) sprintf(name, "input_%04x_%04x_v2.map", input[dev].vid, input[dev].pid);
+	else sprintf(name, "%s_input_%04x_%04x_v2.map", user_io_get_core_name_ex(), input[dev].vid, input[dev].pid);
 	return name;
 }
 
@@ -1192,6 +1200,10 @@ void finish_map_setting(int dismiss)
 	else
 	{
 		for (int i = 0; i < NUMDEV; i++) input[i].has_map = 0;
+
+		if (mapping_button < 0) mapping_button = 0;
+		if (!is_menu_core()) for (uint i = mapping_button; i < BTN_NUM; i++) input[mapping_dev].map[i] = 0;
+
 		if (!dismiss) FileSaveConfig(get_map_name(mapping_dev, 0), &input[mapping_dev].map, sizeof(input[mapping_dev].map));
 		if (is_menu_core()) input[mapping_dev].has_mmap = 0;
 	}
@@ -1199,12 +1211,17 @@ void finish_map_setting(int dismiss)
 
 uint16_t get_map_vid()
 {
-	return (mapping_dev >= 0) ? input[mapping_dev].vid : 0;
+	return (mapping && mapping_dev >= 0) ? input[mapping_dev].vid : 0;
 }
 
 uint16_t get_map_pid()
 {
-	return (mapping_dev >= 0) ? input[mapping_dev].pid : 0;
+	return (mapping && mapping_dev >= 0) ? input[mapping_dev].pid : 0;
+}
+
+int has_default_map()
+{
+	return (mapping_dev >= 0) ? (input[mapping_dev].has_mmap == 1) : 0;
 }
 
 static char kr_fn_table[] =
@@ -1269,22 +1286,23 @@ static int keyrah_trans(int key, int press)
 	return key;
 }
 
-#define KEY_EMU_LEFT  (KEY_MAX+1)
-#define KEY_EMU_RIGHT (KEY_MAX+2)
-#define KEY_EMU_UP    (KEY_MAX+3)
-#define KEY_EMU_DOWN  (KEY_MAX+4)
+#define KEY_EMU (KEY_MAX+1)
 
-#define KEY_EMU_LT    (KEY_EMU_LEFT+16)
-#define KEY_EMU_RT    (KEY_EMU_LEFT+17)
-#define KEY_EMU_PS    (KEY_EMU_LEFT+18)
-
+#define AXIS1_X 24
+#define AXIS1_Y 25
+#define AXIS2_X 26
+#define AXIS2_Y 27
+#define AXIS_X  28
+#define AXIS_Y  29
+#define AXIS_MX 30
+#define AXIS_MY 31
 
 static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int dev);
 
 static int kbd_toggle = 0;
-static uint16_t joy[NUMPLAYERS] = {}, joy_prev[NUMPLAYERS] = {};
-static uint16_t autofire[NUMPLAYERS] = {};
-static uint16_t autofirecodes[NUMPLAYERS][16] = {};
+static uint32_t joy[NUMPLAYERS] = {}, joy_prev[NUMPLAYERS] = {};
+static uint32_t autofire[NUMPLAYERS] = {};
+static uint32_t autofirecodes[NUMPLAYERS][BTN_NUM] = {};
 static int af_delay[NUMPLAYERS] = {};
 
 static unsigned char mouse_btn = 0;
@@ -1296,17 +1314,20 @@ static int mouse_emu_y = 0;
 
 static uint32_t mouse_timer = 0;
 
-static void joy_digital(int jnum, uint16_t mask, uint16_t code, char press, int bnum)
+#define BTN_TGL 100
+#define BTN_OSD 101
+
+static void joy_digital(int jnum, uint32_t mask, uint32_t code, char press, int bnum)
 {
 	static char str[128];
-	static uint16_t lastcode[NUMPLAYERS], lastmask[NUMPLAYERS];
+	static uint32_t lastcode[NUMPLAYERS], lastmask[NUMPLAYERS];
 	int num = jnum - 1;
 
 	if (num < NUMPLAYERS)
 	{
 		if (jnum)
 		{
-			if (bnum != 17 && bnum != 16)
+			if (bnum != BTN_OSD && bnum != BTN_TGL)
 			{
 				if (!(mask & 0xF))
 				{
@@ -1330,7 +1351,7 @@ static void joy_digital(int jnum, uint16_t mask, uint16_t code, char press, int 
 					{
 						int found = 0;
 						int zero = -1;
-						for (int i = 0; i < 16; i++)
+						for (uint i = 0; i < BTN_NUM; i++)
 						{
 							if (!autofirecodes[num][i]) zero = i;
 							if (autofirecodes[num][i] == lastcode[num])
@@ -1388,13 +1409,13 @@ static void joy_digital(int jnum, uint16_t mask, uint16_t code, char press, int 
 			}
 		}
 
-		if (bnum == 16)
+		if (bnum == BTN_TGL)
 		{
 			if(press) kbd_toggle = !kbd_toggle;
 			return;
 		}
 
-		if (!user_io_osd_is_visible() && (bnum == 17) && (mouse_emu & 1))
+		if (!user_io_osd_is_visible() && (bnum == BTN_OSD) && (mouse_emu & 1))
 		{
 			if (press)
 			{
@@ -1413,7 +1434,7 @@ static void joy_digital(int jnum, uint16_t mask, uint16_t code, char press, int 
 			return;
 		}
 
-		if (user_io_osd_is_visible() || (bnum == 17))
+		if (user_io_osd_is_visible() || (bnum == BTN_OSD))
 		{
 			memset(joy, 0, sizeof(joy));
 			struct input_event ev;
@@ -1450,7 +1471,7 @@ static void joy_digital(int jnum, uint16_t mask, uint16_t code, char press, int 
 				break;
 
 			default:
-				ev.code = (bnum == 17) ? KEY_MENU : 0;
+				ev.code = (bnum == BTN_OSD) ? KEY_MENU : 0;
 			}
 
 			input_cb(&ev, 0, 0);
@@ -1464,7 +1485,7 @@ static void joy_digital(int jnum, uint16_t mask, uint16_t code, char press, int 
 			if (code)
 			{
 				int found = 0;
-				for (int i = 0; i < 16; i++) if (autofirecodes[num][i] == code) found = 1;
+				for (uint i = 0; i < BTN_NUM; i++) if (autofirecodes[num][i] == code) found = 1;
 				if (found) autofire[num] = press ? autofire[num] | mask : autofire[num] & ~mask;
 			}
 		}
@@ -1487,9 +1508,11 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 {
 	static int key_mapped = 0;
 
-	int map_skip = (ev->type == EV_KEY && ev->code == 57 && mapping_dev >= 0 && mapping_type==1);
-	int cancel   = (ev->type == EV_KEY && ev->code == 1);
-	int enter    = (ev->type == EV_KEY && ev->code == 28);
+	if (ev->type == EV_KEY && mapping && mapping_type == 3 && ev->code == input[dev].mmap[17]) ev->code = KEY_ENTER;
+
+	int map_skip = (ev->type == EV_KEY && ev->code == KEY_SPACE && ((mapping_dev >= 0 && mapping_type==1) || mapping_button<0));
+	int cancel   = (ev->type == EV_KEY && ev->code == KEY_ESC);
+	int enter    = (ev->type == EV_KEY && ev->code == KEY_ENTER);
 	int origcode = ev->code;
 
 	//mouse
@@ -1543,17 +1566,11 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 			if (is_menu_core() || !FileLoadConfig(get_map_name(dev, 1), &input[dev].map, sizeof(input[dev].map)))
 			{
 				memset(input[dev].map, 0, sizeof(input[dev].map));
+				input[dev].has_map++;
 			}
 
-			//remove alt controls from default map
-			input[dev].map[8]  = 0;
-			input[dev].map[9]  = 0;
-			input[dev].map[10] = 0;
-			input[dev].map[11] = 0;
-			input[dev].map[12] = 0;
-			input[dev].map[13] = 0;
-			input[dev].map[14] = 0;
-			input[dev].map[15] = 0;
+			//remove system controls from default map
+			for (uint i = 8; i < sizeof(input[0].map) / sizeof(input[0].map[0]); i++) input[dev].map[i] = 0;
 			input[dev].has_map++;
 		}
 		input[dev].has_map++;
@@ -1564,14 +1581,17 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 		if (!FileLoadConfig(get_map_name(dev, 1), &input[dev].mmap, sizeof(input[dev].mmap)))
 		{
 			memset(input[dev].mmap, 0, sizeof(input[dev].mmap));
+			input[dev].has_mmap++;
 		}
-		input[dev].has_mmap = 1;
+		input[dev].has_mmap++;
 	}
 
 	//mapping
 	if (mapping && (mapping_dev >=0 || ev->value) && !cancel && !enter)
 	{
-		if (ev->type == EV_KEY)
+		if (is_menu_core()) spi_uio_cmd(UIO_KEYBOARD); //ping the Menu core to wakeup
+
+		if (ev->type == EV_KEY && mapping_button>=0)
 		{
 			if (mapping_type == 2)
 			{
@@ -1618,7 +1638,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 					mapping_type = (ev->code >= 256) ? 1 : 0;
 				}
 
-				if (mapping_dev == dev && mapping_button < mapping_count)
+				if (mapping_dev == dev && mapping_button < (is_menu_core() ? 17 : mapping_count))
 				{
 					if (ev->value == 1)
 					{
@@ -1629,13 +1649,13 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 						if (!found)
 						{
-							input[dev].map[(mapping_button == (mapping_count - 1) && is_menu_core()) ? 16 + mapping_type : mapping_button] = ev->code;
-							key_mapped = 1;
+							input[dev].map[(mapping_button == 16 && is_menu_core()) ? 16 + mapping_type : mapping_button] = ev->code;
+							key_mapped = ev->code;
 						}
 					}
-					else if(ev->value == 0)
+					else if(ev->value == 0 && key_mapped == ev->code)
 					{
-						if (key_mapped) mapping_button++;
+						mapping_button++;
 						key_mapped = 0;
 					}
 				}
@@ -1644,10 +1664,127 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 			}
 		}
 
+		//Define min-0-max analogs
+		int idx = 0;
+		if (is_menu_core())
+		{
+			switch (mapping_button)
+			{
+				case 17: idx = AXIS_X;  break;
+				case 18: idx = AXIS_Y;  break;
+				case 19: idx = AXIS_MX; break;
+				case 20: idx = AXIS_MY; break;
+				case -4: idx = AXIS1_X; break;
+				case -3: idx = AXIS1_Y; break;
+				case -2: idx = AXIS2_X; break;
+				case -1: idx = AXIS2_Y; break;
+			}
+
+			if (mapping_dev == dev || (mapping_dev < 0 && mapping_button < 0))
+			{
+				int max = 0, min=0;
+
+				if (ev->type == EV_ABS)
+				{
+					int threshold = (absinfo->maximum - absinfo->minimum) / 10;
+
+					max = (ev->value >= (absinfo->maximum - threshold));
+					min = (ev->value <= (absinfo->minimum + threshold));
+					printf("threshold=%d, min=%d, max=%d\n", threshold, min, max);
+				}
+
+				//check DPAD horz
+				if (mapping_button == -6)
+				{
+					if (ev->type == EV_ABS && max)
+					{
+						if (mapping_dev < 0) mapping_dev = dev;
+						mapping_type = 1;
+
+						if (absinfo->maximum > 2)
+						{
+							tmp_axis[tmp_axis_n++] = ev->code | 0x20000;
+							mapping_button++;
+						}
+						else
+						{
+							//Standard DPAD event
+							mapping_button += 2;
+						}
+					}
+					else if (ev->type == EV_KEY && ev->value == 1)
+					{
+						//DPAD uses simple button events
+						if (!map_skip)
+						{
+							mapping_button += 2;
+							if (mapping_dev < 0) mapping_dev = dev;
+							if (ev->code < 256)
+							{
+								// keyboard, skip stick 1/2
+								mapping_button += 4;
+								mapping_type = 0;
+							}
+						}
+					}
+				}
+				//check DPAD vert
+				else if (mapping_button == -5)
+				{
+					if (ev->type == EV_ABS && max && absinfo->maximum > 1 && ev->code != (tmp_axis[0] & 0xFFFF))
+					{
+						tmp_axis[tmp_axis_n++] = ev->code | 0x20000;
+						mapping_button++;
+					}
+				}
+				//Sticks
+				else if (ev->type == EV_ABS && idx)
+				{
+					if (mapping_dev < 0) mapping_dev = dev;
+
+					if (idx && max && absinfo->maximum > 2)
+					{
+						if (mapping_button < 0)
+						{
+							int found = 0;
+							for (int i = 0; i < tmp_axis_n; i++) if (ev->code == (tmp_axis[i] & 0xFFFF)) found = 1;
+							if (!found)
+							{
+								mapping_type = 1;
+								tmp_axis[tmp_axis_n++] = ev->code | 0x20000;
+								//if (min) tmp_axis[idx - AXIS1_X] |= 0x10000;
+								mapping_button++;
+								if (tmp_axis_n >= 4) mapping_button = 0;
+							}
+						}
+						else
+						{
+							if (idx == AXIS_X || ev->code != (input[dev].map[idx - 1] & 0xFFFF))
+							{
+								input[dev].map[idx] = ev->code | 0x20000;
+								//if (min) input[dev].map[idx] |= 0x10000;
+								mapping_button++;
+							}
+						}
+					}
+				}
+			}
+		}
+
 		if (mapping_type <= 1 && map_skip && mapping_button < mapping_count)
 		{
-			if (ev->value == 1) mapping_button++;
-			return;
+			if (ev->value == 1)
+			{
+				if (idx && mapping_dev >= 0) input[mapping_dev].map[idx] = 0;
+				mapping_button++;
+				if (mapping_button < 0 && (mapping_button&1)) mapping_button++;
+			}
+		}
+
+		if (is_menu_core() && mapping_type <= 1 && mapping_dev >= 0)
+		{
+			memcpy(&input[mapping_dev].mmap[AXIS1_X], tmp_axis, sizeof(tmp_axis));
+			memcpy(&input[mapping_dev].map[AXIS1_X], tmp_axis, sizeof(tmp_axis));
 		}
 	}
 	else
@@ -1680,6 +1817,12 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 					}
 				}
 
+				if (ev->code == input[dev].mmap[17])
+				{
+					if (ev->value <= 1) joy_digital(input[dev].num, 0, 0, ev->value, BTN_OSD);
+					return;
+				}
+
 				if (user_io_osd_is_visible())
 				{
 					if (ev->value <= 1)
@@ -1697,7 +1840,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 						if (ev->code == input[dev].mmap[17])
 						{
-							joy_digital(0, 0, 0, ev->value, 17);
+							joy_digital(0, 0, 0, ev->value, BTN_OSD);
 							return;
 						}
 					}
@@ -1706,7 +1849,9 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 				{
 					if (mouse_emu)
 					{
-						for (int i = 8; i <= 14; i++)
+						int use_analog = (input[dev].mmap[AXIS_MX] || input[dev].mmap[AXIS_MY]);
+
+						for (int i = (use_analog ? 12 : 8); i <= 14; i++)
 						{
 							if (ev->code == input[dev].mmap[i])
 							{
@@ -1734,7 +1879,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 							}
 						}
 
-						for (int i = 0; i <= 15; i++)
+						for (uint i = 0; i < BTN_NUM; i++)
 						{
 							if (ev->code == input[dev].map[i])
 							{
@@ -1743,14 +1888,21 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 							}
 						}
 					}
-					else if (input[dev].has_map == 2)
-					{
-						if (ev->value == 1) joy_digital(0, 0, 0, 3, 17);
-						return;
-					}
 					else
 					{
-						for (int i = 0; i <= 15; i++)
+						if (input[dev].has_map == 2)
+						{
+							Info("This joystick is not defined\n    Using default map");
+							input[dev].has_map = 1;
+						}
+
+						if (input[dev].has_map == 3)
+						{
+							Info("This joystick is not defined");
+							input[dev].has_map = 1;
+						}
+
+						for (uint i = 0; i < BTN_NUM; i++)
 						{
 							if (ev->code == input[dev].map[i])
 							{
@@ -1769,12 +1921,6 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 								return;
 							}
 						}
-					}
-
-					if (ev->code == input[dev].mmap[17])
-					{
-						if (ev->value <= 1) joy_digital(input[dev].num, 0, 0, ev->value, 17);
-						return;
 					}
 
 					if (ev->code == input[dev].mmap[15] && (ev->value <= 1) && ((!(mouse_emu & 1)) ^ (!ev->value)))
@@ -1832,7 +1978,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 				{
 					if (!kbd_toggle)
 					{
-						for (int i = 0; i <= 15; i++)
+						for (uint i = 0; i < BTN_NUM; i++)
 						{
 							if (ev->code == input[dev].map[i])
 							{
@@ -1845,7 +1991,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 					if (ev->code == input[dev].mmap[16])
 					{
-						if (ev->value <= 1) joy_digital((user_io_get_kbdemu() == EMU_JOY0) ? 1 : 2, 0, 0, ev->value, 16);
+						if (ev->value <= 1) joy_digital((user_io_get_kbdemu() == EMU_JOY0) ? 1 : 2, 0, 0, ev->value, BTN_TGL);
 						return;
 					}
 				}
@@ -1893,7 +2039,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 						}
 					}
 
-					if (ev->code == input[dev].map[16])
+					if (ev->code == input[dev].mmap[16])
 					{
 						if (ev->value == 1)
 						{
@@ -1919,57 +2065,49 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 		case EV_ABS:
 			if (!user_io_osd_is_visible())
 			{
-				if (ev->code <= 1)
+				// TODO: implement inversion
+
+				//convert to 0..255 range
+				int value = ((ev->value - absinfo->minimum) * 256) / (absinfo->maximum - absinfo->minimum + 1);
+				value = (value < 127 || value>129) ? value - 128 : 0;
+				if (value < -127) value = -127;
+				//printf("ABS: axis %d = %d -> %d\n", ev->code, ev->value, value);
+
+				else if (ev->code == (input[dev].mmap[AXIS_MX] & 0xFFFF) && mouse_emu)
 				{
-					//convert to 0..255 range
-					int value = ((ev->value - absinfo->minimum) * 256) / (absinfo->maximum - absinfo->minimum + 1);
-					//printf("ABS: axis %d = %d -> %d\n", ev->code, ev->value, value);
+					mouse_emu_x = 0;
+					if (value < -1 || value>1) mouse_emu_x = value;
+					mouse_emu_x /= 12;
+					return;
+				}
+				else if (ev->code == (input[dev].mmap[AXIS_MY] & 0xFFFF) && mouse_emu)
+				{
+					mouse_emu_y = 0;
+					if (value < -1 || value>1) mouse_emu_y = value;
+					mouse_emu_y /= 12;
+					return;
+				}
+				else if (ev->code == (input[dev].mmap[AXIS_X] & 0xFFFF))
+				{
+					// skip if first joystick is not defined.
+					if (!input[dev].num) break;
 
-					if (mouse_emu)
-					{
-						if (ev->code == 0) // x
-						{
-							mouse_emu_x = 0;
-							if (value < 127 || value>129) mouse_emu_x = value - 128;
-							mouse_emu_x /= 12;
-							return;
-						}
+					int offset = 0;
+					if (value < -1 || value>1) offset = value;
+					//printf("analog_x = %d\n", offset);
+					joy_analog(input[dev].num, 0, offset);
+					return;
+				}
+				else if (ev->code == (input[dev].mmap[AXIS_Y] & 0xFFFF))
+				{
+					// skip if first joystick is not defined.
+					if (!input[dev].num) break;
 
-						if (ev->code == 1) // y
-						{
-							mouse_emu_y = 0;
-							if (value < 127 || value>129) mouse_emu_y = value - 128;
-							mouse_emu_y /= 12;
-							return;
-						}
-					}
-					else
-					{
-						// skip if first joystick is not defined.
-						if (!input[dev].num) break;
-
-						// TODO:
-						// 1) add analog axis mapping
-						// 2) enable invertion
-
-						if (ev->code == 0) // x
-						{
-							int offset = 0;
-							if (value < 127 || value>129) offset = value - 128;
-							//printf("analog_x = %d\n", offset);
-							joy_analog(input[dev].num, 0, offset);
-							return;
-						}
-
-						if (ev->code == 1) // y
-						{
-							int offset = 0;
-							if (value < 127 || value>129) offset = value - 128;
-							//printf("analog_y = %d\n", offset);
-							joy_analog(input[dev].num, 1, offset);
-							return;
-						}
-					}
+					int offset = 0;
+					if (value < -1 || value>1) offset = value;
+					//printf("analog_y = %d\n", offset);
+					joy_analog(input[dev].num, 1, offset);
+					return;
 				}
 			}
 			break;
@@ -2004,42 +2142,6 @@ static void getVidPid(int num, uint16_t* vid, uint16_t* pid)
 }
 
 static struct pollfd pool[NUMDEV + 1];
-
-// Translate axis values to key events of specific codes.
-// Only binary key press /release logic is supported, any value not 0 is considered
-// a key press, value 0 is key release.
-static void send_axis_key_event(int dev, int code1, int code2, int value1, int value2, int last1, int last2) {
-	struct input_event ev;
-	//note: key events do not require input_absinfo values
-
-	ev.type = EV_KEY;
-	//send key releases first
-	// value1 unset but previously set
-	if (!value1 && last1) {
-		ev.code = code1;
-		ev.value = 0;
-		input_cb(&ev, 0, dev);
-	}
-	// value2 unset but previously set
-	if (!value2 && last2) {
-		ev.code = code2;
-		ev.value = 0;
-		input_cb(&ev, 0, dev);
-	}
-	//send key presses afterwards, but only if previously not set
-	if (value1 && !last1)
-	{
-		ev.code = code1;
-		ev.value = 1;
-		input_cb(&ev, 0, dev);
-	} else //either one or another, not both directions at the same time
-	if (value2 && !last2)
-	{
-		ev.code = code2;
-		ev.value = 1;
-		input_cb(&ev, 0, dev);
-	}
-}
 
 int input_test(int getchar)
 {
@@ -2110,7 +2212,7 @@ int input_test(int getchar)
 								return ev.code;
 							}
 						}
-						else
+						else if(ev.type)
 						{
 							if (ev.type == EV_ABS)
 							{
@@ -2123,14 +2225,41 @@ int input_test(int getchar)
 
 							if (is_menu_core())
 							{
+								/*
+								if (mapping && mapping_type <= 1 && !(ev.type==EV_KEY && ev.value>1))
+								{
+									static char str[64], str2[64];
+									OsdWrite(12, "\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81\x81");
+									sprintf(str, "     VID=%04X PID=%04X", input[i].vid, input[i].pid);
+									OsdWrite(13, str);
+
+									sprintf(str, "Type=%d Code=%d Value=%d", ev.type, ev.code, ev.value);
+									str2[0] = 0;
+									int len = (29 - (strlen(str))) / 2;
+									while (len-- > 0) strcat(str2, " ");
+									strcat(str2, str);
+									OsdWrite(14, str2);
+
+									str2[0] = 0;
+									if (ev.type == EV_ABS)
+									{
+										sprintf(str, "Min=%d Max=%d", absinfo.minimum, absinfo.maximum);
+										int len = (29 - (strlen(str))) / 2;
+										while (len-- > 0) strcat(str2, " ");
+										strcat(str2, str);
+									}
+									OsdWrite(15, str2);
+								}
+								*/
+
 								switch (ev.type)
 								{
-									//keyboard, buttons
+								//keyboard, buttons
 								case EV_KEY:
 									printf("Input event: type=EV_KEY, code=%d(0x%x), value=%d, jnum=%d, ID:%04x:%04x\n", ev.code, ev.code, ev.value, input[i].num, input[i].vid, input[i].pid);
 									break;
 
-									//mouse
+								//mouse
 								case EV_REL:
 									printf("Input event: type=EV_REL, Axis=%d, Offset:=%d, jnum=%d, ID:%04x:%04x\n", ev.code, ev.value, input[i].num, input[i].vid, input[i].pid);
 									break;
@@ -2139,7 +2268,7 @@ int input_test(int getchar)
 								case EV_MSC:
 									break;
 
-									//analog joystick
+								//analog joystick
 								case EV_ABS:
 									if (ev.code == 62) break;
 									if (ev.code == 61) break; //ps3 accel axis
@@ -2166,102 +2295,66 @@ int input_test(int getchar)
 								}
 							}
 
+							//Menu combo on 8BitDo receiver in PSC mode
+							if (input[i].vid == 0x054c && input[i].pid == 0x0cda && ev.type == EV_KEY)
+							{
+								if (ev.code == 164) ev.code = KEY_MENU;
+								if (ev.code == 1)   ev.code = KEY_MENU;
+							}
+
 							input_cb(&ev, &absinfo, i);
 
 							//sumulate digital directions from analog
-							if (ev.type == EV_ABS && !(ev.code<=1 && mouse_emu && !user_io_osd_is_visible()))
+							if (ev.type == EV_ABS && !(mapping && mapping_type<=1 && mapping_button<-4))
 							{
-								// some pads use axis 16 for L/R PAD, axis 17 for U/D PAD
-								// emulate PAD on axis 0/1
-
-								// axis ranges vary per USB controller: some have 0-255, others -32768..+32767 etc.
-								int range = absinfo.maximum - absinfo.minimum + 1;
-								int center = absinfo.minimum + (range/2);
-								int treshold = range/4;
-
-								char l, r, u, d;
-								l = r = u = d = 0;
-								uint16_t offset = 0;
-								char offset_mask1, offset_mask2;
-
-								if (ev.code < 16) offset += 4;
-								if (ev.code < 2)  offset += 4;
-								offset_mask1 = (1 << (offset >> 1)); // 01XX
-								offset_mask2 = (2 << (offset >> 1)); // 10XX
-
-								uint16_t base_axis = !user_io_get_joy_transl() ? 0 : ~ev.code;
-								uint16_t extra_axis = 2;
-								if (input[i].vid == 0x045e && input[i].pid == 0x028e) extra_axis = 3;  // 8BitDo Retro Receiver
-								if (input[i].vid == 0x046d && input[i].pid == 0xc21f) extra_axis = 3;  // Logitech F710
-								if (input[i].vid == 0x0079 && input[i].pid == 0x0006) extra_axis = 0;  // AliExpress USB encoder PCB floods axis 2
-
-								if(ev.code == base_axis || ev.code == extra_axis || ev.code == 16) // x
+								uint8_t axis_state = 0;
+								if ((absinfo.maximum == 1 && absinfo.minimum == -1) || (absinfo.maximum == 2 && absinfo.minimum == 0))
 								{
-									if ((ev.code < 16) ? ev.value < center - treshold : ev.value == -1) l = 1;
-									if ((ev.code < 16) ? ev.value > center + treshold : ev.value ==  1) r = 1;
+									if (ev.value == absinfo.minimum) axis_state = 1;
+									if (ev.value == absinfo.maximum) axis_state = 2;
+								}
+								else
+								{
+									int range = absinfo.maximum - absinfo.minimum + 1;
+									int center = absinfo.minimum + (range / 2);
+									int treshold = range / 4;
 
-									// left or right pressed or now released but previously pressed (for specific controller offset)
-									if (l || r || (input[i].last_x & (offset_mask1 | offset_mask2))) {
-										send_axis_key_event(i, KEY_EMU_LEFT + offset, KEY_EMU_RIGHT + offset, l, r, input[i].last_x & offset_mask1, input[i].last_x & offset_mask2);
-										if (l) input[i].last_x |= offset_mask1;
-										else input[i].last_x &= ~offset_mask1;
-										if (r) input[i].last_x |= offset_mask2;
-										else input[i].last_x &= ~offset_mask2;
+									int only_max = 1;
+									for (int n = 0; n < 4; n++) if (input[i].mmap[AXIS1_X + n] && ((input[i].mmap[AXIS1_X + n] & 0xFFFF) == ev.code)) only_max = 0;
+
+									if (ev.value < center - treshold && !only_max) axis_state = 1;
+									if (ev.value > center + treshold) axis_state = 2;
+								}
+
+								uint8_t last_state = input[i].axis_state[ev.code & 255];
+								input[i].axis_state[ev.code & 255] = axis_state;
+
+								//printf("last_state=%d, axis_state=%d\n", last_state, axis_state);
+								if (last_state != axis_state)
+								{
+									uint16_t ecode = KEY_EMU + (ev.code << 1) - 1;
+									ev.type = EV_KEY;
+									if (last_state)
+									{
+										ev.value = 0;
+										ev.code = ecode + last_state;
+										input_cb(&ev, 0, i);
+									}
+
+									if (axis_state)
+									{
+										ev.value = 1;
+										ev.code = ecode + axis_state;
+										input_cb(&ev, 0, i);
 									}
 								}
 
-								base_axis = !user_io_get_joy_transl() ? 1 : ~ev.code;
-
-								extra_axis = 5;
-								if (input[i].vid == 0x045e && input[i].pid == 0x028e) extra_axis = 4;  // 8BitDo Retro Receiver
-								if (input[i].vid == 0x046d && input[i].pid == 0xc21f) extra_axis = 4;  // Logitech F710
-								if (input[i].vid == 0x0079 && input[i].pid == 0x0006) extra_axis = 3;  // AliExpress USB encoder PCB
-
-								if (ev.code == base_axis || ev.code == extra_axis || ev.code == 17) // y
-								{
-                                    // override specific to x axis. Negative value as a center??
-                                    if (input[i].vid == 0x046d && input[i].pid == 0xc21f) center = -129; // Logitech F710
-                                    
-									if ((ev.code < 16) ? ev.value < center - treshold : ev.value == -1) u = 1;
-									if ((ev.code < 16) ? ev.value > center + treshold : ev.value ==  1) d = 1;
-
-									// up or down pressed or now released but previously pressed (for specific controller offset)
-									if (u || d || (input[i].last_y & (offset_mask1 | offset_mask2))) {
-										send_axis_key_event(i, KEY_EMU_UP + offset, KEY_EMU_DOWN + offset, u, d,  input[i].last_y & offset_mask1, input[i].last_y & offset_mask2);
-										if (u) input[i].last_y |= offset_mask1;
-										else input[i].last_y &= ~offset_mask1;
-										if (d) input[i].last_y |= offset_mask2;
-										else input[i].last_y &= ~offset_mask2;
-									}
-								}
-
-								if ((input[i].vid == 0x045e && input[i].pid == 0x028e) ||  // 8BitDo Retro Receiver
-									(input[i].vid == 0x046d && input[i].pid == 0xc21f))    // Logitech F710
+								// Menu button on 8BitDo Receiver in D-Input mode
+								if (ev.code == 9 && input[i].vid == 0x2dc8 && (input[i].pid == 0x3100 || input[i].pid == 0x3104))
 								{
 									ev.type = EV_KEY;
-									if (ev.code == 2)
-									{
-										ev.code = KEY_EMU_LT;
-										ev.value = (ev.value == 255) ? 1 : 0;
-										input_cb(&ev, &absinfo, i);
-									}
-
-									if (ev.code == 5)
-									{
-										ev.code = KEY_EMU_RT;
-										ev.value = (ev.value == 255) ? 1 : 0;
-										input_cb(&ev, &absinfo, i);
-									}
-								}
-
-								if (input[i].vid == 0x2dc8 && input[i].pid == 0x3100)  // 8BitDo Retro Receiver (Select+Left)
-								{
-									ev.type = EV_KEY;
-									if (ev.code == 9)
-									{
-										ev.code = KEY_EMU_PS;
-										input_cb(&ev, &absinfo, i);
-									}
+									ev.code = KEY_EMU + (ev.code << 1);
+									input_cb(&ev, &absinfo, i);
 								}
 							}
 						}

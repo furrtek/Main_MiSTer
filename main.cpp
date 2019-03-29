@@ -32,7 +32,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "fpga_io.h"
 #include "scheduler.h"
 
-const char *version = "$VER:HPS" VDATE;
+const char *version = "$VER:" VDATE;
 
 int main(int argc, char *argv[])
 {
@@ -64,7 +64,7 @@ int main(int argc, char *argv[])
 		exit(0);
 	}
 
-	FindStorage();
+	FindStorage();	
 	user_io_init((argc > 1) ? argv[1] : "");
 
 	scheduler_init();
@@ -72,3 +72,4 @@ int main(int argc, char *argv[])
 
 	return 0;
 }
+

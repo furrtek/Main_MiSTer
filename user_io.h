@@ -124,8 +124,6 @@
 #define CONF_YPBPR              0b00100000
 #define CONF_AUDIO_96K          0b01000000
 #define CONF_DVI                0b10000000
-#define CONF_RES_MASK           0x700
-#define CONF_RES_SHIFT          8
 
 // core type value should be unlikely to be returned by broken cores
 #define CORE_TYPE_UNKNOWN   0x55
@@ -184,7 +182,6 @@ char is_archie();
 char is_sharpmz();
 void user_io_poll();
 char user_io_menu_button();
-char user_io_button_dip_switch1();
 char user_io_user_button();
 void user_io_osd_key_enable(char);
 void user_io_serial_tx(char *, uint16_t);
@@ -192,7 +189,6 @@ char *user_io_8bit_get_string(char);
 uint32_t user_io_8bit_set_status(uint32_t, uint32_t);
 int user_io_file_tx(const char* name, unsigned char index = 0, char opensave = 0, char mute = 0, char composite = 0);
 int  user_io_file_mount(char *name, unsigned char index = 0, char pre = 0);
-char user_io_dip_switch1(void);
 char user_io_serial_status(serial_status_t *, uint8_t);
 char *user_io_get_core_name();
 const char *user_io_get_core_name_ex();
@@ -201,6 +197,8 @@ char is_x86_core();
 char is_snes_core();
 char is_neogeo_core();
 char has_menu();
+
+const char *get_image_name(int i);
 
 int user_io_get_kbdemu();
 uint32_t user_io_get_uart_mode();
@@ -216,15 +214,13 @@ void user_io_mouse(unsigned char b, int16_t x, int16_t y);
 void user_io_kbd(uint16_t key, int press);
 char* user_io_create_config_name();
 int user_io_get_joy_transl();
-void user_io_digital_joystick(unsigned char, uint16_t, int);
+void user_io_digital_joystick(unsigned char, uint32_t, int);
 void user_io_analog_joystick(unsigned char, char, char);
 void user_io_set_joyswap(int swap);
 int user_io_get_joyswap();
 char user_io_osd_is_visible();
 void user_io_send_buttons(char);
 void parse_video_mode();
-
-void add_modifiers(uint8_t mod, uint16_t* keys_ps2);
 
 void user_io_set_index(unsigned char index);
 unsigned char user_io_ext_idx(char *, char*);
@@ -233,7 +229,6 @@ void user_io_check_reset(unsigned short modifiers, char useKeys);
 
 void user_io_rtc_reset();
 
-void parse_video_mode();
 int hasAPI1_5();
 
 const char* get_rbf_dir();
@@ -253,5 +248,7 @@ int GetUARTMode();
 int GetMidiLinkMode();
 void SetMidiLinkMode(int mode);
 
+void set_volume(int cmd);
+int  get_volume();
 
 #endif // USER_IO_H

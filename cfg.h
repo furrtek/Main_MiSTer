@@ -22,7 +22,6 @@ typedef struct {
 	uint8_t vga_scaler;
 	uint8_t hdmi_audio_96k;
 	uint8_t dvi;
-	uint8_t video_mode;
 	uint8_t video_info;
 	uint8_t vsync_adjust;
 	uint8_t kbd_nomouse;
@@ -33,7 +32,12 @@ typedef struct {
 	uint8_t vscale_border;
 	uint8_t rbf_hide_datecode;
 	uint8_t menu_pal;
+	int16_t bootcore_timeout;
+	char bootcore[256];
 	char video_conf[1024];
+	char video_conf_pal[1024];
+	char video_conf_ntsc[1024];
+	char font[1024];
 } cfg_t;
 
 //// functions ////
