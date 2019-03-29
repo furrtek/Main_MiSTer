@@ -10,6 +10,8 @@
 #include "../../user_io.h"
 #include "../../osd.h"
 
+bool checked_ok;
+
 void neogeo_osd_progress(const char* name, unsigned int progress) {
 	char progress_buf[30 + 1];
 
@@ -101,7 +103,70 @@ int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_
 	return 1;
 }
 
-static int xml_parse(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, const int n, SAX_Data* sd)
+static int xml_check_files(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, const int n, SAX_Data* sd)
+{
+	const char* romset = (const char*)sd->user;
+	static int in_correct_romset = 0;
+	static char full_path[256];
+
+	switch (evt)
+	{
+	case XML_EVENT_START_NODE:
+		if (!strcasecmp(node->tag, "romset")) {
+			if (!strcasecmp(node->attributes[0].value, romset)) {
+				printf("Romset %s found !\n", romset);
+				in_correct_romset = 1;
+			}
+			else {
+				in_correct_romset = 0;
+			}
+		}
+		if (in_correct_romset) {
+			if (!strcasecmp(node->tag, "file")) {
+				for (int i = 0; i < node->n_attributes; i++) {
+					if (!strcasecmp(node->attributes[i].name, "name")) {
+						struct stat64 st;
+						sprintf(full_path, "%s/neogeo/%s/%s", getRootDir(), romset, node->attributes[i].value);
+						if (!stat64(full_path, &st)) {
+							printf("Found %s\n", full_path);
+							break;
+						}
+						else {
+							printf("Missing %s\n", full_path);
+							sprintf(full_path, "Missing %s !", node->attributes[i].value);
+							OsdWrite(OsdGetSize() - 1, full_path, 0);
+							return false;
+						}
+					}
+				}
+			}
+		}
+		break;
+
+	case XML_EVENT_END_NODE:
+		if (in_correct_romset) {
+			if (!strcasecmp(node->tag, "romset")) {
+				checked_ok = true;
+				return false;
+			}
+		}
+		if (!strcasecmp(node->tag, "romsets")) {
+			printf("Couldn't find romset %s\n", romset);
+			return false;
+		}
+		break;
+
+	case XML_EVENT_ERROR:
+		printf("XML parse: %s: ERROR %d\n", text, n);
+		break;
+	default:
+		break;
+	}
+
+	return true;
+}
+
+static int xml_load_files(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, const int n, SAX_Data* sd)
 {
 	const char* romset = (const char*)sd->user;
 	static char file_name[16 + 1] { "" };
@@ -197,24 +262,33 @@ int neogeo_romset_tx(char* name) {
 	sprintf(full_path, "%s/neogeo/romsets.xml", getRootDir());
 	SAX_Callbacks sax;
 	SAX_Callbacks_init(&sax);
-	sax.all_event = xml_parse;
+
+	checked_ok = false;
+	sax.all_event = xml_check_files;
+	XMLDoc_parse_file_SAX(full_path, &sax, romset);
+	if (!checked_ok) return 0;
+
+	sax.all_event = xml_load_files;
 	XMLDoc_parse_file_SAX(full_path, &sax, romset);
 
 	// Load system ROMs
 	arcade_mode = (user_io_8bit_set_status(0, 0) >> 1) & 1;
-	
-	struct stat64 st;
-	sprintf(full_path, "%s/neogeo/uni-bios.rom", getRootDir());
-	if (!stat64(full_path, &st)) {
-		neogeo_file_tx("", "uni-bios.rom", NEO_FILE_RAW, 0, 0, 0x20000);
-	} else {
-		if (arcade_mode)
-			neogeo_file_tx("", "sp-s2.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
-		else
-			neogeo_file_tx("", "neo-epo.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
+
+	if (strcmp(romset, "debug")) {
+		struct stat64 st;
+		sprintf(full_path, "%s/neogeo/uni-bios.rom", getRootDir());
+		if (!stat64(full_path, &st)) {
+			neogeo_file_tx("", "uni-bios.rom", NEO_FILE_RAW, 0, 0, 0x20000);
+		}
+		else {
+			if (arcade_mode)
+				neogeo_file_tx("", "sp-s2.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
+			else
+				neogeo_file_tx("", "neo-epo.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
+		}
 	}
-	neogeo_file_tx("", "000-lo.lo", NEO_FILE_8BIT, 1, 0, 0x10000);
 	neogeo_file_tx("", "sfix.sfix", NEO_FILE_FIX, 2, 0, 0x10000);
+	neogeo_file_tx("", "000-lo.lo", NEO_FILE_8BIT, 1, 0, 0x10000);
 
 	if (!strcmp(romset, "ssideki") || !strcmp(romset, "fatfury2")) {
 		printf("Enabled PRO-CT0 protection chip\n");

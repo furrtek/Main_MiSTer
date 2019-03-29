@@ -1252,11 +1252,17 @@ void HandleUI(void)
 	case MENU_8BIT_MAIN_FILE_SELECTED:
 		printf("File selected: %s\n", SelectedPath);
 		if (is_neogeo_core()) {
-			neogeo_romset_tx(SelectedPath);
+			if (!neogeo_romset_tx(SelectedPath)) {
+				OsdSetTitle("Message", 0);
+				OsdEnable(0); // do not disable keyboard
+				menu_timer = GetTimer(2000);
+				menustate = MENU_INFO;
+			} else
+				menustate = MENU_NONE1;
 		} else {
 			user_io_file_tx(SelectedPath, user_io_ext_idx(SelectedPath, fs_pFileExt) << 6 | (menusub + 1), opensave);
+			menustate = MENU_NONE1;
 		}
-		menustate = MENU_NONE1;
 		break;
 
 	case MENU_8BIT_MAIN_IMAGE_SELECTED:
