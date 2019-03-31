@@ -243,7 +243,7 @@ static int xml_load_files(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, co
 
 int neogeo_romset_tx(char* name) {
 	char romset[8 + 1];
-	int arcade_mode;
+	int system_type;
 	static char full_path[1024];
 
 	memset(romset, 0, sizeof(romset));
@@ -272,24 +272,36 @@ int neogeo_romset_tx(char* name) {
 	XMLDoc_parse_file_SAX(full_path, &sax, romset);
 
 	// Load system ROMs
-	arcade_mode = (user_io_8bit_set_status(0, 0) >> 1) & 1;
+	system_type = (user_io_8bit_set_status(0, 0) >> 1) & 3;
 
 	if (strcmp(romset, "debug")) {
+		// Not loading the special 'debug' romset
 		struct stat64 st;
-		sprintf(full_path, "%s/neogeo/uni-bios.rom", getRootDir());
-		if (!stat64(full_path, &st)) {
-			neogeo_file_tx("", "uni-bios.rom", NEO_FILE_RAW, 0, 0, 0x20000);
-		}
-		else {
-			if (arcade_mode)
-				neogeo_file_tx("", "sp-s2.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
-			else
-				neogeo_file_tx("", "neo-epo.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
+		if ((system_type == 0) || (system_type == 1)) {
+			sprintf(full_path, "%s/neogeo/uni-bios.rom", getRootDir());
+			if (!stat64(full_path, &st)) {
+				// Autoload Unibios for cart systems if present
+				neogeo_file_tx("", "uni-bios.rom", NEO_FILE_RAW, 0, 0, 0x20000);
+			} else {
+				// Otherwise load normal system roms
+				if (system_type == 0)
+					neogeo_file_tx("", "neo-epo.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
+				else
+					neogeo_file_tx("", "sp-s2.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
+			}
+		} else if (system_type == 2) {
+			// NeoGeo CD
+			neogeo_file_tx("", "top-sp1.bin", NEO_FILE_RAW, 0, 0, 0x80000);
+		} else {
+			// NeoGeo CDZ
+			neogeo_file_tx("", "neocd.bin", NEO_FILE_RAW, 0, 0, 0x80000);
 		}
 	}
-	neogeo_file_tx("", "sfix.sfix", NEO_FILE_FIX, 2, 0, 0x10000);
+	
+	if ((system_type == 0) || (system_type == 1))
+		neogeo_file_tx("", "sfix.sfix", NEO_FILE_FIX, 2, 0, 0x10000);
 	neogeo_file_tx("", "000-lo.lo", NEO_FILE_8BIT, 1, 0, 0x10000);
-
+	
 	if (!strcmp(romset, "ssideki") || !strcmp(romset, "fatfury2")) {
 		printf("Enabled PRO-CT0 protection chip\n");
 		user_io_8bit_set_status(0x01000000, 0x03000000);
