@@ -51,6 +51,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "support.h"
 
+unsigned char iso_mode = 0;
+
 /*menu states*/
 enum MENU
 {
@@ -1306,6 +1308,20 @@ void HandleUI(void)
 			user_io_set_index(user_io_ext_idx(SelectedPath, fs_pFileExt) << 6 | (menusub + 1));
 			user_io_file_mount(SelectedPath, drive_num);
 		}
+
+		// ElectronAsh.
+		strcpy(SelectedPath + strlen(SelectedPath) - 3, "CUE");
+		printf("Checking for presence of CUE file %s\n", SelectedPath);
+		if (user_io_file_mount(SelectedPath, 1)) {
+			iso_mode = 1;
+			printf("CUE file found and mounted.\n");
+			parse_cue_file();
+
+			if (is_neogeo_core())
+				neogeo_romset_tx("");
+		}
+		else iso_mode = 0;
+
 		menustate = SelectedPath[0] ? MENU_NONE1 : MENU_8BIT_MAIN1;
 		break;
 

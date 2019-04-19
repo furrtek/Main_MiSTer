@@ -63,6 +63,8 @@ int FileWriteSec(fileTYPE *file, void *pBuffer);
 
 int FileCanWrite(const char *name);
 
+int FileReadLine(fileTYPE *file, char *pBuffer, int length);
+
 #define SAVE_DIR "saves"
 void FileGenerateSavePath(const char *name, char* out_name);
 

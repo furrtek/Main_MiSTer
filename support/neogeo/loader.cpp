@@ -247,37 +247,40 @@ int neogeo_romset_tx(char* name) {
 	static char full_path[1024];
 
 	memset(romset, 0, sizeof(romset));
-
-	// Get romset name from path (which should point to a .p1 or .ep1 file)
-	char *p = strrchr(name, '/');
-	if (!p) return 0;
-	*p = 0;
-	p = strrchr(name, '/');
-	if (!p) return 0;
-	strncpy(romset, p + 1, strlen(p + 1));
-
-	user_io_8bit_set_status(1, 1);	// Maintain reset
+	
+	system_type = (user_io_8bit_set_status(0, 0) >> 1) & 3;
+	printf("System type: %u\n", system_type);
 
 	// Look for the romset's file list in romsets.xml
-	sprintf(full_path, "%s/neogeo/romsets.xml", getRootDir());
-	SAX_Callbacks sax;
-	SAX_Callbacks_init(&sax);
+	if (!(system_type & 2)) {
+		// Get romset name from path (which should point to a .p1 or .ep1 file)
+		char *p = strrchr(name, '/');
+		if (!p) return 0;
+		*p = 0;
+		p = strrchr(name, '/');
+		if (!p) return 0;
+		strncpy(romset, p + 1, strlen(p + 1));
 
-	checked_ok = false;
-	sax.all_event = xml_check_files;
-	XMLDoc_parse_file_SAX(full_path, &sax, romset);
-	if (!checked_ok) return 0;
+		sprintf(full_path, "%s/neogeo/romsets.xml", getRootDir());
+		SAX_Callbacks sax;
+		SAX_Callbacks_init(&sax);
 
-	sax.all_event = xml_load_files;
-	XMLDoc_parse_file_SAX(full_path, &sax, romset);
+		checked_ok = false;
+		sax.all_event = xml_check_files;
+		XMLDoc_parse_file_SAX(full_path, &sax, romset);
+		if (!checked_ok) return 0;
+
+		sax.all_event = xml_load_files;
+		XMLDoc_parse_file_SAX(full_path, &sax, romset);
+	}
+	
+	user_io_8bit_set_status(1, 1);	// Maintain reset
 
 	// Load system ROMs
-	system_type = (user_io_8bit_set_status(0, 0) >> 1) & 3;
-
 	if (strcmp(romset, "debug")) {
 		// Not loading the special 'debug' romset
 		struct stat64 st;
-		if ((system_type == 0) || (system_type == 1)) {
+		if (!(system_type & 2)) {
 			sprintf(full_path, "%s/neogeo/uni-bios.rom", getRootDir());
 			if (!stat64(full_path, &st)) {
 				// Autoload Unibios for cart systems if present
@@ -298,7 +301,7 @@ int neogeo_romset_tx(char* name) {
 		}
 	}
 	
-	if ((system_type == 0) || (system_type == 1))
+	if (!(system_type & 2))
 		neogeo_file_tx("", "sfix.sfix", NEO_FILE_FIX, 2, 0, 0x10000);
 	neogeo_file_tx("", "000-lo.lo", NEO_FILE_8BIT, 1, 0, 0x10000);
 	
@@ -323,8 +326,11 @@ int neogeo_romset_tx(char* name) {
 	} else 
 		user_io_8bit_set_status(0x00000000, 0x30000000);
 
-	FileGenerateSavePath(name, (char*)full_path);
-	user_io_file_mount((char*)full_path, 0, 1);
+	if (!(system_type & 2))
+		FileGenerateSavePath(name, (char*)full_path);
+	else
+		FileGenerateSavePath("ngcd", (char*)full_path);
+	user_io_file_mount((char*)full_path, 2, 1);
 
 	user_io_8bit_set_status(0, 1);	// Release reset
 

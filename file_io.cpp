@@ -192,6 +192,43 @@ static bool isPathRegularFile(char *path)
 	return false;
 }
 
+int FileReadLine(fileTYPE *file, char *pBuffer, int length)
+{
+	char str[100];
+	int ret = 0;
+	char my_char;
+	int char_count;
+
+	if (file->filp)
+	{
+		//ret = fgets(pBuffer, sizeof(pBuffer), file->filp);
+
+		for (int i=0; i<100; i++) {
+			my_char = fgetc( file->filp );
+			if (my_char==0x0a) break;
+
+			if (my_char!=0x20) {
+				//pBuffer[char_count] = my_char;
+				printf("%s", my_char);
+				char_count++;
+			}
+		}
+
+		/*
+		if (file->type == 1)
+		{
+			if (file->name[0] == '/')
+			{
+				shm_unlink(file->name);
+			}
+			file->type = 0;
+		}
+		*/
+	}
+
+	return ret;
+}
+
 void FileClose(fileTYPE *file)
 {
 	if (file->zip)
