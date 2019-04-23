@@ -250,6 +250,8 @@ int neogeo_romset_tx(char* name) {
 	
 	system_type = (user_io_8bit_set_status(0, 0) >> 1) & 3;
 	printf("System type: %u\n", system_type);
+	
+	user_io_8bit_set_status(1, 1);	// Maintain reset
 
 	// Look for the romset's file list in romsets.xml
 	if (!(system_type & 2)) {
@@ -273,8 +275,6 @@ int neogeo_romset_tx(char* name) {
 		sax.all_event = xml_load_files;
 		XMLDoc_parse_file_SAX(full_path, &sax, romset);
 	}
-	
-	user_io_8bit_set_status(1, 1);	// Maintain reset
 
 	// Load system ROMs
 	if (strcmp(romset, "debug")) {

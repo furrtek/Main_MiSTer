@@ -2095,6 +2095,15 @@ void user_io_poll()
 							}; break;
 
 							case 0x48: {
+								// Added this, Neo CD always requests by MSF (furrtek)
+								if ((req_type & 0xFF) == 0x01) {
+									uint8_t m = bcd_2_dec((lba & 0xFF0000) >> 16);
+									uint8_t s = bcd_2_dec((lba & 0xFF00) >> 8);
+									uint8_t f = bcd_2_dec((lba & 0xFF) >> 0);
+									lba = msf_to_lba(m, s, f);
+									lba -= (2 * 75); // Remove 2 second pregap
+								}
+
 								uint8_t track = cd_lba_to_track(lba);
 								uint16_t bps = cd_trackinfo[track].bytes_per_sec;
 								uint32_t pregap = 0;
