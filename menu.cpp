@@ -48,6 +48,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "input.h"
 #include "battery.h"
 #include "bootcore.h"
+#include "cheats.h"
 
 #include "support.h"
 
@@ -99,12 +100,21 @@ enum MENU
 	MENU_JOYDIGMAP,
 	MENU_JOYDIGMAP1,
 	MENU_JOYDIGMAP2,
+	MENU_JOYDIGMAP3,
+	MENU_JOYDIGMAP4,
 	MENU_JOYKBDMAP,
 	MENU_JOYKBDMAP1,
 	MENU_KBDMAP,
 	MENU_KBDMAP1,
+	MENU_SCRIPTS_PRE,
+	MENU_SCRIPTS_PRE1,
 	MENU_SCRIPTS,
 	MENU_SCRIPTS1,
+	MENU_BTPAIR,
+	MENU_WMPAIR,
+	MENU_WMPAIR1,
+	MENU_CHEATS1,
+	MENU_CHEATS2,
 
 	// Mist/atari specific pages
 	MENU_MIST_MAIN1,
@@ -171,7 +181,7 @@ const char *config_autofire_msg[] = { "        AUTOFIRE OFF", "        AUTOFIRE 
 const char *config_cd32pad_msg[] = { "OFF", "ON" };
 const char *config_button_turbo_msg[] = { "OFF", "FAST", "MEDIUM", "SLOW" };
 const char *config_button_turbo_choice_msg[] = { "A only", "B only", "A & B" };
-const char *joy_button_map[] = { "RIGHT", "LEFT", "DOWN", "UP", "BUTTON 1", "BUTTON 2", "BUTTON 3", "BUTTON 4", "KBD TOGGLE", "BUTTON OSD", "     Stick X: Tilt RIGHT", "     Stick Y: Tilt DOWN", "   Mouse emu X: Tilt RIGHT", "   Mouse emu Y: Tilt DOWN" };
+const char *joy_button_map[] = { "RIGHT", "LEFT", "DOWN", "UP", "BUTTON 1", "BUTTON 2", "BUTTON 3", "BUTTON 4", "KBD TOGGLE", "MENU", "     Stick X: Tilt RIGHT", "     Stick Y: Tilt DOWN", "   Mouse emu X: Tilt RIGHT", "   Mouse emu Y: Tilt DOWN" };
 const char *joy_ana_map[] = { "    DPAD test: Press RIGHT", "    DPAD test: Press DOWN", "     Stick 1: Tilt RIGHT", "     Stick 1: Tilt DOWN", "     Stick 2: Tilt RIGHT", "     Stick 2: Tilt DOWN" };
 const char *config_stereo_msg[] = { "0%", "25%", "50%", "100%" };
 const char *config_uart_msg[] = { "     None", "      PPP", "  Console", "     MIDI" };
@@ -197,7 +207,7 @@ const char *helptexts[] =
 	"                                Welcome to MiSTer!  Use the cursor keys to navigate the menus.  Use space bar or enter to select an item.  Press Esc or F12 to exit the menus.  Joystick emulation on the numeric keypad can be toggled with the numlock or scrlock key, while pressing Ctrl-Alt-0 (numeric keypad) toggles autofire mode.",
 	"                                Minimig can emulate an A600/A1200 IDE harddisk interface.  The emulation can make use of Minimig-style hardfiles (complete disk images) or UAE-style hardfiles (filesystem images with no partition table).",
 	"                                Minimig's processor core can emulate a 68000 or 68020 processor (though the 68020 mode is still experimental.)  If you're running software built for 68000, there's no advantage to using the 68020 mode, since the 68000 emulation runs just as fast.",
-	"                                Minimig can make use of up to 2 megabytes of Chip RAM, up to 1.5 megabytes of Slow RAM (A500 Trapdoor RAM), and up to 24 megabytes of true Fast RAM.  To use the HRTmon feature you will need a file on the SD card named hrtmon.rom. HRTMon is not compatible with Fast RAM.",
+	"                                Minimig can make use of up to 2 megabytes of Chip RAM, up to 1.5 megabytes of Slow RAM (A500 Trapdoor RAM), and up to 24 megabytes of true Fast RAM.  To use the HRTmon feature you will need a file on the SD card named hrtmon.rom.",
 	"                                Minimig's video features include a blur filter, to simulate the poorer picture quality on older monitors, and also scanline generation to simulate the appearance of a screen with low vertical resolution.",
 	0
 };
@@ -471,12 +481,70 @@ static uint32_t menu_key_get(void)
 	// currently no key pressed
 	if (!c)
 	{
+		static unsigned long longpress = 0, longpress_consumed = 0;
 		static unsigned char last_but = 0;
 		unsigned char but = user_io_menu_button();
-		if (!but && last_but) c = KEY_F12;
+
+		if (but && !last_but) longpress = GetTimer(3000);
+		if (but && CheckTimer(longpress) && !longpress_consumed)
+		{
+			longpress_consumed = 1;
+			menustate = MENU_BTPAIR;
+		}
+
+		if (!but && last_but && !longpress_consumed) c = KEY_F12;
+
+		if (!but) longpress_consumed = 0;
 		last_but = but;
 	}
 	return(c);
+}
+
+static int has_bt()
+{
+	FILE *fp;
+	static char out[1035];
+
+	fp = popen("hcitool dev | grep hci0", "r");
+	if (!fp) return 0;
+
+	int ret = 0;
+	while (fgets(out, sizeof(out) - 1, fp) != NULL)
+	{
+		if (strlen(out)) ret = 1;
+	}
+
+	pclose(fp);
+	return ret;
+}
+
+static int toggle_wminput()
+{
+	if (access("/bin/wminput", F_OK) < 0 || access("/media/fat/linux/wiimote.cfg", F_OK) < 0) return -1;
+
+	FILE *fp;
+	static char out[1035];
+
+	fp = popen("pidof wminput", "r");
+	if (!fp) return -1;
+
+	int ret = -1;
+	if (fgets(out, sizeof(out) - 1, fp) != NULL)
+	{
+		if (strlen(out))
+		{
+			system("killall wminput");
+			ret = 0;
+		}
+	}
+	else
+	{
+		system("taskset 1 wminput --daemon --config /media/fat/linux/wiimote.cfg &");
+		ret = 1;
+	}
+
+	pclose(fp);
+	return ret;
 }
 
 static char* getNet(int spec)
@@ -664,9 +732,9 @@ const char* get_rbf_name_bootcore(char *str)
 		return NULL;
 	}
 	return p + 1;
-
-
 }
+
+static int joymap_first = 0;
 
 void HandleUI(void)
 {
@@ -698,6 +766,9 @@ void HandleUI(void)
 	static char drive_num = 0;
 	static char flag;
 	static int cr = 0;
+	static uint32_t cheatsub = 0;
+	static uint8_t card_cid[32];
+	static uint32_t hdmask = 0;
 
 	static char	cp_MenuCancel;
 
@@ -732,6 +803,20 @@ void HandleUI(void)
 			status <<= 1;
 			user_io_8bit_set_status(status, 0xE);
 			FileSaveConfig(user_io_create_config_name(), &status, 4);
+		}
+		break;
+
+	case KEY_F11:
+		if (user_io_osd_is_visible())
+		{
+			menustate = MENU_BTPAIR;
+		}
+		break;
+
+	case KEY_F10:
+		if (user_io_osd_is_visible() && !access("/bin/wminput", F_OK))
+		{
+			menustate = MENU_WMPAIR;
 		}
 		break;
 
@@ -899,42 +984,53 @@ void HandleUI(void)
 	case MENU_ARCHIE_MAIN1:
 		OsdSetTitle(user_io_get_core_name(), OSD_ARROW_RIGHT | OSD_ARROW_LEFT);
 
-		menumask = 0xff;
-		OsdWrite(0, "", 0, 0);
+		m = 0;
+		menumask = 0x3ff;
+		OsdWrite(m++);
 
 		strcpy(s, " Floppy 0: ");
 		strncat(s, get_image_name(0) ? get_image_name(0) : "* no disk *",27);
-		OsdWrite(1, s, menusub == 0, 0);
+		OsdWrite(m++, s, menusub == 0);
 
 		strcpy(s, " Floppy 1: ");
 		strncat(s, get_image_name(1) ? get_image_name(1) : "* no disk *", 27);
-		OsdWrite(2, s, menusub == 1, 0);
+		OsdWrite(m++, s, menusub == 1);
 
-		OsdWrite(3, "", 0, 0);
+		OsdWrite(m++);
 
 		strcpy(s, " OS ROM: ");
 		strcat(s, archie_get_rom_name());
-		OsdWrite(4, s, menusub == 2, 0);
+		OsdWrite(m++, s, menusub == 2);
 
-		OsdWrite(5, "", 0, 0);
+		OsdWrite(m++);
 
 		strcpy(s, " Aspect ratio:       ");
 		strcat(s, archie_get_ar() ? "16:9" : "4:3");
-		OsdWrite(6, s, menusub == 3, 0);
+		OsdWrite(m++, s, menusub == 3);
 
-		OsdWrite(7, "", 0, 0);
+		strcpy(s, " Refresh rate:       ");
+		strcat(s, archie_get_60() ? "Variable" : "60Hz");
+		OsdWrite(m++, s, menusub == 4);
+
+		OsdWrite(m++);
+
 		sprintf(s, " Stereo mix:         %s", config_stereo_msg[archie_get_amix()]);
-		OsdWrite(8, s, menusub == 4, 0);
+		OsdWrite(m++, s, menusub == 5);
 
-		OsdWrite(9, "", 0, 0);
+		strcpy(s, " 25MHz audio fix:    ");
+		strcat(s, archie_get_afix() ? "Enable" : "Disable");
+		OsdWrite(m++, s, menusub == 6);
+
+		OsdWrite(m++);
+
 		sprintf(s, " Swap joysticks:     %s", user_io_get_joyswap() ? "Yes" : "No");
-		OsdWrite(10, s, menusub == 5, 0);
+		OsdWrite(m++, s, menusub == 7);
 		sprintf(s, " Swap mouse btn 2/3: %s", archie_get_mswap() ? "Yes" : "No");
-		OsdWrite(11, s, menusub == 6, 0);
+		OsdWrite(m++, s, menusub == 8);
 
-		for (int i = 12; i<15; i++) OsdWrite(i, "", 0, 0);
+		while(m<15) OsdWrite(m++);
 
-		OsdWrite(15, STD_EXIT, menusub == 7, 0);
+		OsdWrite(15, STD_EXIT, menusub == 9, 0);
 		menustate = MENU_ARCHIE_MAIN2;
 		parentstate = MENU_ARCHIE_MAIN1;
 
@@ -966,21 +1062,31 @@ void HandleUI(void)
 				break;
 
 			case 4:
-				archie_set_amix(archie_get_amix()+1);
+				archie_set_60(!archie_get_60());
 				menustate = MENU_ARCHIE_MAIN1;
 				break;
 
 			case 5:
-				user_io_set_joyswap(!user_io_get_joyswap());
+				archie_set_amix(archie_get_amix()+1);
 				menustate = MENU_ARCHIE_MAIN1;
 				break;
 
 			case 6:
+				archie_set_afix(!archie_get_afix());
+				menustate = MENU_ARCHIE_MAIN1;
+				break;
+
+			case 7:
+				user_io_set_joyswap(!user_io_get_joyswap());
+				menustate = MENU_ARCHIE_MAIN1;
+				break;
+
+			case 8:
 				archie_set_mswap(!archie_get_mswap());
 				menustate = MENU_ARCHIE_MAIN1;
 				break;
 
-			case 7:  // Exit
+			case 9:  // Exit
 				menustate = MENU_NONE1;
 				break;
 			}
@@ -1010,6 +1116,10 @@ void HandleUI(void)
 		/******************************************************************/
 
 	case MENU_8BIT_MAIN1: {
+		spi_uio_cmd_cont(UIO_GET_OSDMASK);
+		hdmask = spi_w(0);
+		DisableIO();
+
 		int entry = 0;
 		while(1)
 		{
@@ -1036,117 +1146,154 @@ void HandleUI(void)
 				p = user_io_8bit_get_string(i++);
 				//printf("Option %d: %s\n", i-1, p);
 
-				// check for 'F'ile or 'S'D image strings
-				if (p && ((p[0] == 'F') || (p[0] == 'S')))
+				if (p)
 				{
-					substrcpy(s, p, 2);
-					if (strlen(s))
+					int h = 0, d = 0;
+
+					//Hide or Disable flag
+					while((p[0] == 'H' || p[0] == 'D') && strlen(p)>2)
 					{
-						strcpy(s, " ");
-						substrcpy(s + 1, p, 2);
-						strcat(s, " *.");
-					}
-					else
-					{
-						if (p[0] == 'F') strcpy(s, " Load *.");
-						else            strcpy(s, " Mount *.");
-					}
-					pos = s + strlen(s);
-					substrcpy(pos, p, 1);
-					strcpy(pos, GetExt(pos));
-					MenuWrite(entry, s, menusub == selentry, 0);
-
-					// add bit in menu mask
-					menumask = (menumask << 1) | 1;
-					entry++;
-					selentry++;
-				}
-
-				// check for 'T'oggle and 'R'eset (toggle and then close menu) strings
-				if (p && ((p[0] == 'T') || (p[0] == 'R')))
-				{
-
-					s[0] = ' ';
-					substrcpy(s + 1, p, 1);
-					MenuWrite(entry, s, menusub == selentry, 0);
-
-					// add bit in menu mask
-					menumask = (menumask << 1) | 1;
-					entry++;
-					selentry++;
-				}
-
-				// check for 'O'ption strings
-				if (p && (p[0] == 'O'))
-				{
-					//option handled by ARM
-					if (p[1] == 'X') p++;
-
-					unsigned long x = getStatus(p, status);
-
-					// get currently active option
-					substrcpy(s, p, 2 + x);
-					char l = strlen(s);
-					if (!l)
-					{
-						// option's index is outside of available values.
-						// reset to 0.
-						x = 0;
-						user_io_8bit_set_status(setStatus(p, status, x), 0xffffffff);
-						substrcpy(s, p, 2 + x);
-						l = strlen(s);
+						int flg = (hdmask & (1<<getIdx(p))) ? 1 : 0;
+						if (p[0] == 'H') h = flg; else d = flg;
+						p += 2;
 					}
 
-					s[0] = ' ';
-					substrcpy(s + 1, p, 1);
-
-					char *end = s + strlen(s) - 1;
-					while ((end > s + 1) && (*end == ' ')) end--;
-					*(end + 1) = 0;
-
-					strcat(s, ":");
-					l = 28 - l - strlen(s);
-					while (l--) strcat(s, " ");
-
-					substrcpy(s + strlen(s), p, 2 + x);
-
-					MenuWrite(entry, s, menusub == selentry, 0);
-
-					// add bit in menu mask
-					menumask = (menumask << 1) | 1;
-					entry++;
-					selentry++;
-				}
-
-				// delimiter
-				if (p && (p[0] == '-'))
-				{
-					MenuWrite(entry, "", 0, 0);
-					entry++;
-				}
-
-				// check for 'V'ersion strings
-				if (p && (p[0] == 'V'))
-				{
-					// get version string
-					strcpy(s, OsdCoreName());
-					strcat(s, " ");
-					substrcpy(s + strlen(s), p, 1);
-					OsdCoreNameSet(s);
-				}
-
-				if (p && (p[0] == 'J'))
-				{
-					// joystick button names.
-					for (int n = 0; n < 28; n++)
+					if (!h)
 					{
-						substrcpy(joy_bnames[n], p, n + 1);
-						//printf("joy_bname = %s\n", joy_bnames[n]);
-						if (!joy_bnames[n][0]) break;
-						joy_bcount++;
+						// check for 'F'ile or 'S'D image strings
+						if ((p[0] == 'F') || (p[0] == 'S'))
+						{
+							substrcpy(s, p, 2);
+							if (strlen(s))
+							{
+								strcpy(s, " ");
+								substrcpy(s + 1, p, 2);
+								strcat(s, " *.");
+							}
+							else
+							{
+								if (p[0] == 'F') strcpy(s, " Load *.");
+								else             strcpy(s, " Mount *.");
+							}
+							pos = s + strlen(s);
+							substrcpy(pos, p, 1);
+							strcpy(pos, GetExt(pos));
+							MenuWrite(entry, s, menusub == selentry, d);
+
+							// add bit in menu mask
+							menumask = (menumask << 1) | 1;
+							entry++;
+							selentry++;
+						}
+
+						// check for 'C'heats
+						if (p[0] == 'C')
+						{
+							substrcpy(s, p, 1);
+							if (strlen(s))
+							{
+								strcpy(s, " ");
+								substrcpy(s + 1, p, 1);
+							}
+							else
+							{
+								strcpy(s, " Cheats");
+							}
+							MenuWrite(entry, s, menusub == selentry, !cheats_available() || d);
+
+							// add bit in menu mask
+							menumask = (menumask << 1) | 1;
+							entry++;
+							selentry++;
+						}
+
+						// check for 'T'oggle and 'R'eset (toggle and then close menu) strings
+						if ((p[0] == 'T') || (p[0] == 'R'))
+						{
+
+							s[0] = ' ';
+							substrcpy(s + 1, p, 1);
+							MenuWrite(entry, s, menusub == selentry, d);
+
+							// add bit in menu mask
+							menumask = (menumask << 1) | 1;
+							entry++;
+							selentry++;
+						}
+
+						// check for 'O'ption strings
+						if (p[0] == 'O')
+						{
+							//option handled by ARM
+							if (p[1] == 'X') p++;
+
+							unsigned long x = getStatus(p, status);
+
+							// get currently active option
+							substrcpy(s, p, 2 + x);
+							char l = strlen(s);
+							if (!l)
+							{
+								// option's index is outside of available values.
+								// reset to 0.
+								x = 0;
+								user_io_8bit_set_status(setStatus(p, status, x), 0xffffffff);
+								substrcpy(s, p, 2 + x);
+								l = strlen(s);
+							}
+
+							s[0] = ' ';
+							substrcpy(s + 1, p, 1);
+
+							char *end = s + strlen(s) - 1;
+							while ((end > s + 1) && (*end == ' ')) end--;
+							*(end + 1) = 0;
+
+							strcat(s, ":");
+							l = 28 - l - strlen(s);
+							while (l--) strcat(s, " ");
+
+							substrcpy(s + strlen(s), p, 2 + x);
+
+							MenuWrite(entry, s, menusub == selentry, d);
+
+							// add bit in menu mask
+							menumask = (menumask << 1) | 1;
+							entry++;
+							selentry++;
+						}
+
+						// delimiter
+						if (p[0] == '-')
+						{
+							MenuWrite(entry, "", 0, 0);
+							entry++;
+						}
 					}
 
-					//printf("joy_bcount = %d\n", joy_bcount);
+					// check for 'V'ersion strings
+					if (p[0] == 'V')
+					{
+						// get version string
+						strcpy(s, OsdCoreName());
+						strcat(s, " ");
+						substrcpy(s + strlen(s), p, 1);
+						OsdCoreNameSet(s);
+					}
+
+					if (p[0] == 'J')
+					{
+						// joystick button names.
+						for (int n = 0; n < 28; n++)
+						{
+							substrcpy(joy_bnames[n], p, n + 1);
+							//printf("joy_bname = %s\n", joy_bnames[n]);
+							if (!joy_bnames[n][0]) break;
+							joy_bcount++;
+						}
+
+						//printf("joy_bcount = %d\n", joy_bcount);
+					}
 				}
 			} while (p);
 
@@ -1198,74 +1345,96 @@ void HandleUI(void)
 				static char ext[256];
 				p = user_io_8bit_get_string(1);
 
+				int h = 0, d = 0;
 				uint32_t entry = 0;
 				int i = 1;
 				while (1)
 				{
 					p = user_io_8bit_get_string(i++);
-					if (!p || p[0] < 'A') continue;
+					if (!p) continue;
+				
+					h = 0;
+					d = 0;
+
+					//Hide or Disable flag
+					while ((p[0] == 'H' || p[0] == 'D') && strlen(p) > 2)
+					{
+						int flg = (hdmask & (1 << getIdx(p))) ? 1 : 0;
+						if (p[0] == 'H') h = flg; else d = flg;
+						p += 2;
+					}
+
+					if (h || p[0] < 'A') continue;
 					if (entry == menusub) break;
 					entry++;
 				}
 
-				if (p[0] == 'F')
+				if (!d)
 				{
-					opensave = (p[1] == 'S');
-					substrcpy(ext, p, 1);
-					while (strlen(ext) % 3) strcat(ext, " ");
-					SelectFile(ext, SCANO_DIR, MENU_8BIT_MAIN_FILE_SELECTED, MENU_8BIT_MAIN1);
-				}
-				else if (p[0] == 'S')
-				{
-					drive_num = 0;
-					if (p[1] >= '0' && p[1] <= '3') drive_num = p[1] - '0';
-					substrcpy(ext, p, 1);
-					while (strlen(ext) % 3) strcat(ext, " ");
-					SelectFile(ext, SCANO_DIR | SCANO_UMOUNT, MENU_8BIT_MAIN_IMAGE_SELECTED, MENU_8BIT_MAIN1);
-				}
-				else if (p[0] == 'O')
-				{
-					int byarm = 0;
-					if (p[1] == 'X')
+					if (p[0] == 'C' && cheats_available())
 					{
-						byarm = 1;
-						p++;
+						menustate = MENU_CHEATS1;
+						cheatsub = menusub;
+						menusub = 0;
 					}
-
-					unsigned long status = user_io_8bit_set_status(0, 0);  // 0,0 gets status
-					unsigned long x = getStatus(p, status) + 1;
-
-					if (byarm && is_x86_core())
+					else if (p[0] == 'F')
 					{
-						if (p[1] == '2') x86_set_fdd_boot(!(x&1));
+						opensave = (p[1] == 'S');
+						substrcpy(ext, p, 1);
+						while (strlen(ext) % 3) strcat(ext, " ");
+						SelectFile(ext, SCANO_DIR, MENU_8BIT_MAIN_FILE_SELECTED, MENU_8BIT_MAIN1);
 					}
-					// check if next value available
-					substrcpy(s, p, 2 + x);
-					if (!strlen(s)) x = 0;
-
-					user_io_8bit_set_status(setStatus(p, status, x), 0xffffffff);
-
-					menustate = MENU_8BIT_MAIN1;
-				}
-				else if ((p[0] == 'T') || (p[0] == 'R'))
-				{
-					// determine which status bit is affected
-					unsigned long mask = 1 << getIdx(p);
-					if (mask == 1 && is_x86_core())
+					else if (p[0] == 'S')
 					{
-						x86_init();
-						menustate = MENU_NONE1;
+						drive_num = 0;
+						if (p[1] >= '0' && p[1] <= '3') drive_num = p[1] - '0';
+						substrcpy(ext, p, 1);
+						while (strlen(ext) % 3) strcat(ext, " ");
+						SelectFile(ext, SCANO_DIR | SCANO_UMOUNT, MENU_8BIT_MAIN_IMAGE_SELECTED, MENU_8BIT_MAIN1);
 					}
-					else
+					else if (p[0] == 'O')
 					{
-						unsigned long status = user_io_8bit_set_status(0, 0);
+						int byarm = 0;
+						if (p[1] == 'X')
+						{
+							byarm = 1;
+							p++;
+						}
 
-						user_io_8bit_set_status(status ^ mask, mask);
-						user_io_8bit_set_status(status, mask);
+						unsigned long status = user_io_8bit_set_status(0, 0);  // 0,0 gets status
+						unsigned long x = getStatus(p, status) + 1;
+
+						if (byarm && is_x86_core())
+						{
+							if (p[1] == '2') x86_set_fdd_boot(!(x & 1));
+						}
+						// check if next value available
+						substrcpy(s, p, 2 + x);
+						if (!strlen(s)) x = 0;
+
+						user_io_8bit_set_status(setStatus(p, status, x), 0xffffffff);
+
 						menustate = MENU_8BIT_MAIN1;
-						if (p[0] == 'R') menustate = MENU_NONE1;
 					}
+					else if ((p[0] == 'T') || (p[0] == 'R'))
+					{
+						// determine which status bit is affected
+						unsigned long mask = 1 << getIdx(p);
+						if (mask == 1 && is_x86_core())
+						{
+							x86_init();
+							menustate = MENU_NONE1;
+						}
+						else
+						{
+							unsigned long status = user_io_8bit_set_status(0, 0);
 
+							user_io_8bit_set_status(status ^ mask, mask);
+							user_io_8bit_set_status(status, mask);
+							menustate = MENU_8BIT_MAIN1;
+							if (p[0] == 'R') menustate = MENU_NONE1;
+						}
+					}
 				}
 			}
 		}
@@ -1292,8 +1461,10 @@ void HandleUI(void)
 			} else
 				menustate = MENU_NONE1;
 		} else {
-			user_io_file_tx(SelectedPath, user_io_ext_idx(SelectedPath, fs_pFileExt) << 6 | (menusub + 1), opensave);
-			menustate = MENU_NONE1;
+    		user_io_store_filename(SelectedPath);
+    		user_io_file_tx(SelectedPath, user_io_ext_idx(SelectedPath, fs_pFileExt) << 6 | (menusub + 1), opensave);
+    		if(user_io_use_cheats()) cheats_init(SelectedPath, user_io_get_file_crc());
+    		menustate = MENU_NONE1;
 		}
 		break;
 
@@ -1435,6 +1606,7 @@ void HandleUI(void)
 				start_map_setting(joy_bcount ? joy_bcount+4 : 8);
 				menustate = MENU_JOYDIGMAP;
 				menusub = 0;
+				joymap_first = 1;
 				break;
 			case 2:
 				start_map_setting(-1);
@@ -1734,18 +1906,27 @@ void HandleUI(void)
 
 	case MENU_JOYDIGMAP:
 		helptext = 0;
-		menumask = 0;
+		menumask = 1;
 		OsdSetTitle("Define buttons", 0);
 		menustate = MENU_JOYDIGMAP1;
 		parentstate = MENU_JOYDIGMAP;
-		for (int i = 0; i < OsdGetSize(); i++) OsdWrite(i, "", 0, 0);
-		OsdWrite(8, "       Esc   -> Cancel", 0, 0);
-		OsdWrite(9, "       Enter -> Cancel", 0, 0);
-		OsdWrite(10,"       Space -> Skip", 0, 0);
+		for (int i = 0; i < OsdGetSize(); i++) OsdWrite(i);
+		OsdWrite(7, "          Esc \x16 Cancel");
+		OsdWrite(8, "        Enter \x16 Finish");
+		OsdWrite(9, "        Space \x16 Skip");
 		break;
 
 	case MENU_JOYDIGMAP1:
 		{
+			if (get_map_clear())
+			{
+				OsdWrite(3);
+				OsdWrite(4, "           Clearing");
+				OsdWrite(5);
+				joymap_first = 1;
+				break;
+			}
+
 			const char* p = 0;
 			if (get_map_button() < 0)
 			{
@@ -1760,7 +1941,7 @@ void HandleUI(void)
 				p = joy_bnames[get_map_button() - 4];
 				if (is_menu_core())
 				{
-					if (get_map_type()) joy_bcount = 17;
+					if (get_map_type()) joy_bcount = 15;
 					if (get_map_button() == 16) p = joy_button_map[8 + get_map_type()];
 				}
 			}
@@ -1791,11 +1972,12 @@ void HandleUI(void)
 			}
 
 			OsdWrite(3, s, 0, 0);
+			OsdWrite(4);
 			if (get_map_vid() || get_map_pid())
 			{
 				if (!is_menu_core() && get_map_type() && !has_default_map())
 				{
-					for (int i = 0; i < OsdGetSize(); i++) OsdWrite(i, "", 0, 0);
+					for (int i = 0; i < OsdGetSize(); i++) OsdWrite(i);
 					OsdWrite(6, "   You need to define this");
 					OsdWrite(7, " joystick in Menu core first");
 					OsdWrite(9, "      Press ESC/Enter");
@@ -1807,14 +1989,20 @@ void HandleUI(void)
 					sprintf(s, "   %s ID: %04x:%04x", get_map_type() ? "Joystick" : "Keyboard", get_map_vid(), get_map_pid());
 					if (get_map_button() > 0)
 					{
-						OsdWrite(9, "       Enter -> Finish", 0, 0);
-						if (!get_map_type()) OsdWrite(10);
+						if (!get_map_type()) OsdWrite(9);
 					}
-					OsdWrite(5, s, 0, 0);
+					OsdWrite(5, s);
+					if (!is_menu_core()) OsdWrite(10, "     Menu/F12 \x16 Clear all");
 				}
 			}
 
-			if (select || menu || get_map_button() >= (joy_bcount ? joy_bcount + 4 : 8))
+			if (!is_menu_core() && (get_map_button() >= (joy_bcount ? joy_bcount + 4 : 8) || (select & get_map_vid() & get_map_pid())) && joymap_first && get_map_type())
+			{
+				finish_map_setting(0);
+				menustate = MENU_JOYDIGMAP3;
+				menusub = 0;
+			}
+			else if (select || menu || get_map_button() >= (joy_bcount ? joy_bcount + 4 : 8))
 			{
 				finish_map_setting(menu);
 				if (is_menu_core())
@@ -1836,6 +2024,44 @@ void HandleUI(void)
 		{
 			menustate = MENU_8BIT_SYSTEM1;
 			menusub = 1;
+		}
+		break;
+
+	case MENU_JOYDIGMAP3:
+		for (int i = 0; i < OsdGetSize(); i++) OsdWrite(i);
+		m = 6;
+		menumask = 3;
+		OsdWrite(m++, "    Do you want to setup");
+		OsdWrite(m++, "    alternative buttons?");
+		OsdWrite(m++, "           No", menusub == 0);
+		OsdWrite(m++, "           Yes", menusub == 1);
+		parentstate = menustate;
+		menustate = MENU_JOYDIGMAP4;
+		break;
+
+	case MENU_JOYDIGMAP4:
+		if (menu)
+		{
+			menustate = MENU_8BIT_SYSTEM1;
+			menusub = 1;
+			break;
+		}
+		else if (select)
+		{
+			switch (menusub)
+			{
+			case 0:
+				menustate = MENU_8BIT_SYSTEM1;
+				menusub = 1;
+				break;
+
+			case 1:
+				start_map_setting(joy_bcount ? joy_bcount + 4 : 8, 1);
+				menustate = MENU_JOYDIGMAP;
+				menusub = 0;
+				joymap_first = 0;
+				break;
+			}
 		}
 		break;
 
@@ -1870,6 +2096,7 @@ void HandleUI(void)
 				sprintf(s, "    on device %04x:%04x", get_map_vid(), get_map_pid());
 				OsdWrite(3, s, 0, 0);
 			}
+			OsdWrite(OsdGetSize() - 1, " Enter \x16 Finish, Esc \x16 Clear", menusub == 0, 0);
 		}
 		else
 		{
@@ -1885,7 +2112,7 @@ void HandleUI(void)
 				OsdWrite(2, "      on the same pad", 0, 0);
 				OsdWrite(3, "    or key on a keyboard", 0, 0);
 			}
-			OsdWrite(OsdGetSize() - 1, " Enter \x16 Finish, Esc \x16 Clear", menusub == 0, 0);
+			OsdWrite(OsdGetSize() - 1);
 		}
 
 		if (select || menu)
@@ -1916,7 +2143,7 @@ void HandleUI(void)
 		OsdDrawLogo(3);
 		OsdDrawLogo(4);
 
-		sprintf(s, "       HPS s/w v%s", version + 5);
+		sprintf(s, "       MiSTer v%s", version + 5);
 		OsdWrite(10, s, 0, 0, 1);
 
 		s[0] = 0;
@@ -2764,6 +2991,73 @@ void HandleUI(void)
 		break;
 
 		/******************************************************************/
+		/* cheats menu                                                    */
+		/******************************************************************/
+	case MENU_CHEATS1:
+		helptext = helptexts[HELPTEXT_NONE];
+		sprintf(s, "Cheats (%d)", cheats_loaded());
+		OsdSetTitle(s);
+		cheats_print();
+		menustate = MENU_CHEATS2;
+		parentstate = menustate;
+		break;
+
+	case MENU_CHEATS2:
+		menumask = 0;
+
+		if (menu)
+		{
+			menustate = MENU_8BIT_MAIN1;
+			menusub = cheatsub;
+			break;
+		}
+
+		cheats_scroll_name();
+
+		if (c == KEY_HOME)
+		{
+			cheats_scan(SCANF_INIT);
+			menustate = MENU_CHEATS1;
+		}
+
+		if (c == KEY_END)
+		{
+			cheats_scan(SCANF_END);
+			menustate = MENU_CHEATS1;
+		}
+
+		if ((c == KEY_PAGEUP) || (c == KEY_LEFT))
+		{
+			cheats_scan(SCANF_PREV_PAGE);
+			menustate = MENU_CHEATS1;
+		}
+
+		if ((c == KEY_PAGEDOWN) || (c == KEY_RIGHT))
+		{
+			cheats_scan(SCANF_NEXT_PAGE);
+			menustate = MENU_CHEATS1;
+		}
+
+		if (down) // scroll down one entry
+		{
+			cheats_scan(SCANF_NEXT);
+			menustate = MENU_CHEATS1;
+		}
+
+		if (up) // scroll up one entry
+		{
+			cheats_scan(SCANF_PREV);
+			menustate = MENU_CHEATS1;
+		}
+
+		if (select)
+		{
+			cheats_toggle();
+			menustate = MENU_CHEATS1;
+		}
+		break;
+
+		/******************************************************************/
 		/* reset menu                                                     */
 		/******************************************************************/
 	case MENU_RESET1:
@@ -3390,7 +3684,17 @@ void HandleUI(void)
 
 		OsdSetTitle("System Settings", 0);
 		OsdWrite(0, "", 0, 0);
-		sprintf(s, "       HPS s/w v%s", version + 5);
+		sprintf(s, "       MiSTer v%s", version + 5);
+		{
+			char str[8] = {};
+			FILE *f = fopen("/MiSTer.version", "r");
+			if (f)
+			{
+				if (fread(str, 6, 1, f)) sprintf(s, " MiSTer v%s,  OS v%s", version + 5, str);
+				fclose(f);
+			}
+		}
+
 		OsdWrite(1, s, 0, 0);
 
 		{
@@ -3466,39 +3770,136 @@ void HandleUI(void)
 				strcpy(joy_bnames[1], "Btn 2 (ESC/Back)");
 				strcpy(joy_bnames[2], "Btn 3 (Backspace)");
 				strcpy(joy_bnames[3], "Btn 4");
-				strcpy(joy_bnames[4], "RIGHT (Alt/Mouse)");
-				strcpy(joy_bnames[5], "LEFT (Alt/Mouse)");
-				strcpy(joy_bnames[6], "DOWN (Alt/Mouse)");
-				strcpy(joy_bnames[7], "UP (Alt/Mouse)");
+				strcpy(joy_bnames[4], "Mouse Move RIGHT");
+				strcpy(joy_bnames[5], "Mouse Move LEFT");
+				strcpy(joy_bnames[6], "Mouse Move DOWN");
+				strcpy(joy_bnames[7], "Mouse Move UP");
 				strcpy(joy_bnames[8], "Mouse Left Btn");
 				strcpy(joy_bnames[9], "Mouse Right Btn");
 				strcpy(joy_bnames[10], "Mouse Middle Btn");
 				strcpy(joy_bnames[11], "Mouse Emu/Sniper");
-				start_map_setting(21);
+				start_map_setting(19);
 				menustate = MENU_JOYDIGMAP;
 				menusub = 0;
 				break;
 			case 3:
-				SelectFile("SH", SCANO_DIR, MENU_SCRIPTS, MENU_FIRMWARE1);
+				{
+					uint8_t confirm[32] = {};
+					int match = 0;
+					int fd = open("/sys/block/mmcblk0/device/cid", O_RDONLY);
+					if (fd >= 0)
+					{
+						int ret = read(fd, card_cid, 32);
+						close(fd);
+						if (ret == 32)
+						{
+							if (FileLoadConfig("script_confirm", confirm, 32))
+							{
+								match = !memcmp(card_cid, confirm, 32);
+							}
+						}
+					}
+
+					if(match) SelectFile("SH", SCANO_DIR, MENU_SCRIPTS, MENU_FIRMWARE1);
+					else
+					{
+						menustate = MENU_SCRIPTS_PRE;
+						menusub = 0;
+					}
+				}
 				break;
 			}
 		}
 		printSysInfo();
 		break;
 
+	case MENU_WMPAIR:
+		{
+			OsdSetTitle("Wiimote", 0);
+			int res = toggle_wminput();
+			menu_timer = GetTimer(2000);
+			for (int i = 0; i < OsdGetSize(); i++) OsdWrite(i);
+			if (res < 0)       OsdWrite(7, "    Cannot enable Wiimote");
+			else if (res == 0) OsdWrite(7, "       Wiimote disabled");
+			else
+			{
+				OsdWrite(7, "       Wiimote enabled");
+				OsdWrite(9, "    Press 1+2 to connect");
+				menu_timer = GetTimer(3000);
+			}
+			menustate = MENU_WMPAIR1;
+		}
+		//fall through
+
+	case MENU_WMPAIR1:
+		if (CheckTimer(menu_timer)) menustate = MENU_NONE1;
+		break;
+
+	case MENU_SCRIPTS_PRE:
+		OsdSetTitle("Warning!!!", 0);
+		helptext = 0;
+		menumask = 7;
+		m = 0;
+		OsdWrite(m++);
+		OsdWrite(m++, "         Attention:");
+		OsdWrite(m++, " This is dangerous operation!");
+		OsdWrite(m++);
+		OsdWrite(m++, " Script has control over the");
+		OsdWrite(m++, " whole system and may damage");
+		OsdWrite(m++, " the files or settings, then");
+		OsdWrite(m++, " MiSTer won't boot, so you");
+		OsdWrite(m++, " will have to re-format the");
+		OsdWrite(m++, " SD card and fill with files");
+		OsdWrite(m++, " in order to use it again.");
+		OsdWrite(m++);
+		OsdWrite(m++, "  Do you want to continue?");
+		OsdWrite(m++, "            No", menusub == 0);
+		OsdWrite(m++, "            Yes", menusub == 1);
+		OsdWrite(m++, "  Yes, and don't ask again", menusub == 2);
+		menustate = MENU_SCRIPTS_PRE1;
+		parentstate = MENU_SCRIPTS_PRE;
+		break;
+
+	case MENU_SCRIPTS_PRE1:
+		if (menu) menustate = MENU_FIRMWARE1;
+		else if (select)
+		{
+			switch (menusub)
+			{
+			case 0:
+				menustate = MENU_FIRMWARE1;
+				break;
+
+			case 2:
+				FileSaveConfig("script_confirm", card_cid, 32);
+				// fall through
+
+			case 1:
+				SelectFile("SH", SCANO_DIR, MENU_SCRIPTS, MENU_FIRMWARE1);
+				break;
+			}
+		}
+		break;
+
+	case MENU_BTPAIR:
+		OsdSetSize(16);
+		OsdEnable(DISABLE_KEYBOARD);
+		parentstate = MENU_BTPAIR;
+		//fall through
+
 	case MENU_SCRIPTS:
 		helptext = 0;
 		menumask = 1;
 		menusub = 0;
-		OsdSetTitle(flist_SelectedItem()->d_name, 0);
+		OsdSetTitle((parentstate == MENU_BTPAIR) ? "BT Pairing" : flist_SelectedItem()->d_name, 0);
 		menustate = MENU_SCRIPTS1;
-		parentstate = MENU_SCRIPTS;
+		if (parentstate != MENU_BTPAIR) parentstate = MENU_SCRIPTS;
 		for (int i = 0; i < OsdGetSize() - 1; i++) OsdWrite(i, "", 0, 0);
 		OsdWrite(OsdGetSize() - 1, "           Cancel", menusub == 0, 0);
 		for (int i = 0; i < script_lines; i++) strcpy(script_output[i], "");
 		script_line=0;
 		script_exited = false;
-		script_pipe=popen(getFullPath(SelectedPath), "r");
+		script_pipe=popen((parentstate != MENU_BTPAIR) ? getFullPath(SelectedPath) : "/usr/sbin/btpair", "r");
 		script_file = fileno(script_pipe);
 		fcntl(script_file, F_SETFL, O_NONBLOCK);
 		break;
@@ -3510,7 +3911,7 @@ void HandleUI(void)
 				if (fgets(script_line_output, script_line_length, script_pipe) != NULL)
 				{
 					script_line_output[strcspn(script_line_output, "\n")] = 0;
-					if (script_line < OsdGetSize() - 1)
+					if (script_line < OsdGetSize() - 2)
 					{
 						strcpy(script_output[script_line++], script_line_output);
 					}
@@ -3519,7 +3920,7 @@ void HandleUI(void)
 						strcpy(script_output[script_line], script_line_output);
 						for (int i = 0; i < script_line; i++) strcpy(script_output[i], script_output[i+1]);
 					};
-					for (int i = 0; i < OsdGetSize() - 1; i++) OsdWrite(i, script_output[i], 0, 0);
+					for (int i = 0; i < OsdGetSize() - 2; i++) OsdWrite(i, script_output[i], 0, 0);
 				};
 			}
 			else {
@@ -3527,23 +3928,31 @@ void HandleUI(void)
 				script_exited=true;
 				OsdWrite(OsdGetSize() - 1, "             OK", menusub == 0, 0);
 			};
-		};		
-		if (select || menu)
+		};
+
+		if (select || (script_exited && menu))
 		{
 			if (!script_exited)
 			{
 				strcpy(script_command, "killall ");
-				strcat(script_command, flist_SelectedItem()->d_name);
+				strcat(script_command, (parentstate == MENU_BTPAIR) ? "btpair" : flist_SelectedItem()->d_name);
 				system(script_command);
 				pclose(script_pipe);
-				script_exited=true;
+				script_exited = true;
 			};
-			menustate = MENU_FIRMWARE1;
-			menusub = 3;
+
+			if (parentstate == MENU_BTPAIR)
+			{
+				menustate = MENU_NONE1;
+			}
+			else
+			{
+				menustate = MENU_FIRMWARE1;
+				menusub = 3;
+			}
 		}
 		break;
 
-		
 	case MENU_KBDMAP:
 		helptext = 0;
 		menumask = 1;
@@ -3565,16 +3974,16 @@ void HandleUI(void)
 				sprintf(s, "    on keyboard %04x:%04x", get_map_vid(), get_map_pid());
 			}
 			OsdWrite(5, s, 0, 0);
+			OsdWrite(OsdGetSize() - 1, "           finish", menusub == 0, 0);
 		}
 		else
 		{
 			flag = 1;
-			sprintf(s, "   Press key to map %02X to", get_map_button() & 0xFF);
+			sprintf(s, "  Press key to map 0x%02X to", get_map_button() & 0xFF);
 			OsdWrite(3, s, 0, 0);
 			OsdWrite(5, "      on any keyboard", 0, 0);
+			OsdWrite(OsdGetSize() - 1);
 		}
-
-		OsdWrite(OsdGetSize() - 1, "           finish", menusub == 0, 0);
 
 		if (select || menu)
 		{
@@ -3676,17 +4085,19 @@ void HandleUI(void)
 				}				
 			}
 
-			sprintf(str, "  MiSTer   ");
+			sprintf(str, "  MiSTer    ");
 
 			time_t t = time(NULL);
 			struct tm tm = *localtime(&t);
 			if (tm.tm_year >= 117)
 			{
-				strftime(str + strlen(str), sizeof(str) - 1 - strlen(str), "%b %d %a %H:%M:%S", &tm);
+				strftime(str + strlen(str), sizeof(str) - 1 - strlen(str), "%b %d %a%H:%M:%S", &tm);
 			}
 
 			int netType = (int)getNet(0);
 			if (netType) str[9] = 0x1b + netType;
+			if (has_bt()) str[10] = 4;
+			str[21] = ' ';
 
 			OsdWrite(16, "", 1, 0);
 			OsdWrite(17, str, 1, 0);
@@ -3703,6 +4114,7 @@ void open_joystick_setup()
 	OsdEnable(DISABLE_KEYBOARD);
 	start_map_setting(joy_bcount ? joy_bcount + 4 : 8);
 	menustate = MENU_JOYDIGMAP;
+	joymap_first = 1;
 }
 
 void ScrollLongName(void)
@@ -3739,7 +4151,7 @@ void ScrollLongName(void)
 	if (flist_SelectedItem()->d_type == DT_DIR)
 		max_len = 25; // number of directory name characters to display
 
-	ScrollText(flist_iSelectedEntry()-flist_iFirstEntry(), flist_SelectedItem()->d_name, 2, len, max_len, 1);
+	ScrollText(flist_iSelectedEntry()-flist_iFirstEntry(), flist_SelectedItem()->d_name, 0, len, max_len, 1);
 }
 
 void PrintFileName(char *name, int row, int maxinv)
@@ -3979,4 +4391,9 @@ void Info(const char *message, int timeout, int width, int height, int frame)
 		menu_timer = GetTimer(timeout);
 		menustate = MENU_INFO;
 	}
+}
+
+void menu_bt_pair()
+{
+	menustate = MENU_BTPAIR;
 }

@@ -68,6 +68,10 @@ int FileReadLine(fileTYPE *file, char *pBuffer, int length);
 #define SAVE_DIR "saves"
 void FileGenerateSavePath(const char *name, char* out_name);
 
+#define SCREENSHOT_DIR "screenshots"
+#define SCREENSHOT_DEFAULT "screen"
+void FileGenerateScreenshotName(const char *name, char *out_name, int buflen);
+
 int FileSave(const char *name, void *pBuffer, int size);
 int FileLoad(const char *name, void *pBuffer, int size); // supply pBuffer = 0 to get the file size without loading
 

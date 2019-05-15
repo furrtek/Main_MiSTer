@@ -7,6 +7,8 @@
 #include <sys/inotify.h>
 #include <sys/poll.h>
 #include <sys/sysinfo.h>
+#include <dirent.h>
+
 #include "input.h"
 #include "user_io.h"
 #include "menu.h"
@@ -16,7 +18,7 @@
 #include "osd.h"
 #include "errno.h"
 
-#define NUMDEV 10
+#define NUMDEV 20
 #define NUMPLAYERS 6
 
 static int ev2amiga[] =
@@ -968,11 +970,22 @@ uint32_t get_key_mod()
 	return modifier & MODMASK;
 }
 
+enum QUIRK
+{
+	QUIRK_NONE = 0,
+	QUIRK_CWIID,
+	QUIRK_WIIMOTE,
+	QUIRK_DS3,
+	QUIRK_DS4,
+	QUIRK_DS4TOUCH,
+};
+
 typedef struct
 {
 	uint16_t vid, pid;
 	uint8_t  led;
-	uint8_t  axis_state[256];
+	uint8_t  axis_edge[256];
+	int8_t   axis_pos[256];
 
 	uint8_t  num;
 	uint8_t  has_map;
@@ -986,6 +999,15 @@ typedef struct
 	uint8_t  kbdmap[256];
 
 	int      accx, accy;
+	int      quirk;
+
+	int      lightgun_req;
+	int      lightgun;
+
+	int      bind;
+	char     devname[32];
+	char     uniq[32];
+	char     name[128];
 }  devInput;
 
 static devInput input[NUMDEV] = {};
@@ -1137,35 +1159,49 @@ int toggle_kbdled(int mask)
 
 static int mapping = 0;
 static int mapping_button;
-static int mapping_dev;
+static int mapping_dev = -1;
 static int mapping_type;
 static int mapping_count;
-static uint8_t mapping_key;
+static int mapping_clear;
+static int mapping_set;
 
 static uint32_t tmp_axis[4];
 static int tmp_axis_n = 0;
 
-void start_map_setting(int cnt)
+void start_map_setting(int cnt, int set)
 {
 	mapping_button = 0;
 	mapping = 1;
-	mapping_dev = -1;
-	mapping_type = (cnt<0) ? 3 : cnt ? 1 : 2;
+	mapping_set = set;
+	if (!mapping_set)
+	{
+		mapping_dev = -1;
+		mapping_type = (cnt < 0) ? 3 : cnt ? 1 : 2;
+	}
 	mapping_count = cnt;
+	mapping_clear = 0;
 	tmp_axis_n = 0;
 
 	if (mapping_type <= 1 && is_menu_core()) mapping_button = -6;
 	memset(tmp_axis, 0, sizeof(tmp_axis));
+
+	//un-stick the enter key
+	user_io_kbd(KEY_ENTER, 0);
 }
 
 int get_map_button()
 {
-	return (mapping_type == 2) ? mapping_key : mapping_button;
+	return mapping_button;
 }
 
 int get_map_type()
 {
 	return mapping_type;
+}
+
+int get_map_clear()
+{
+	return mapping_clear;
 }
 
 static char *get_map_name(int dev, int def)
@@ -1200,9 +1236,6 @@ void finish_map_setting(int dismiss)
 	else
 	{
 		for (int i = 0; i < NUMDEV; i++) input[i].has_map = 0;
-
-		if (mapping_button < 0) mapping_button = 0;
-		if (!is_menu_core()) for (uint i = mapping_button; i < BTN_NUM; i++) input[mapping_dev].map[i] = 0;
 
 		if (!dismiss) FileSaveConfig(get_map_name(mapping_dev, 0), &input[mapping_dev].map, sizeof(input[mapping_dev].map));
 		if (is_menu_core()) input[mapping_dev].has_mmap = 0;
@@ -1306,6 +1339,7 @@ static uint32_t autofirecodes[NUMPLAYERS][BTN_NUM] = {};
 static int af_delay[NUMPLAYERS] = {};
 
 static unsigned char mouse_btn = 0;
+static unsigned char mice_btn = 0;
 static int mouse_emu = 0;
 static int kbd_mouse_emu = 0;
 static int mouse_sniper = 0;
@@ -1424,7 +1458,7 @@ static void joy_digital(int jnum, uint32_t mask, uint32_t code, char press, int 
 				mouse_btn = 0;
 				mouse_emu_x = 0;
 				mouse_emu_y = 0;
-				user_io_mouse(0, 0, 0);
+				user_io_mouse(mice_btn, 0, 0);
 
 				mouse_emu ^= 2;
 				if (hasAPI1_5()) Info((mouse_emu & 2) ? "Mouse mode ON" : "Mouse mode OFF");
@@ -1504,8 +1538,22 @@ static void joy_analog(int num, int axis, int offset)
 	}
 }
 
+static int ds_mouse_emu = 0;
+
 static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int dev)
 {
+	int sub_dev = dev;
+
+	//check if device is a part of multifunctional device 
+	if (input[dev].bind >= 0) dev = input[dev].bind;
+
+	//mouse
+	if (ev->type == EV_KEY && ev->code >= BTN_MOUSE && ev->code < BTN_JOYSTICK)
+	{
+		//skip it. we use /dev/input/mice
+		return;
+	}
+
 	static int key_mapped = 0;
 
 	if (ev->type == EV_KEY && mapping && mapping_type == 3 && ev->code == input[dev].mmap[17]) ev->code = KEY_ENTER;
@@ -1514,50 +1562,6 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 	int cancel   = (ev->type == EV_KEY && ev->code == KEY_ESC);
 	int enter    = (ev->type == EV_KEY && ev->code == KEY_ENTER);
 	int origcode = ev->code;
-
-	//mouse
-	switch (ev->type)
-	{
-	case EV_KEY:
-		if (ev->code >= 272 && ev->code <= 279)
-		{
-			if (ev->value <= 1)
-			{
-				unsigned char mask = 1 << (ev->code - 272);
-				mouse_btn = (ev->value) ? mouse_btn | mask : mouse_btn & ~mask;
-				user_io_mouse(mouse_btn, 0, 0);
-			}
-			return;
-		}
-		break;
-
-	case EV_REL:
-		{
-			int msval;
-			if (!cfg.mouse_throttle) cfg.mouse_throttle = 1;
-
-			switch (ev->code)
-			{
-			case 0:
-				input[dev].accx += ev->value;
-				msval = input[dev].accx / cfg.mouse_throttle;
-				input[dev].accx -= msval * cfg.mouse_throttle;
-
-				//printf("Mouse PosX: %d\n", msval);
-				user_io_mouse(mouse_btn, msval, 0);
-				return;
-			case 1:
-				input[dev].accy += ev->value;
-				msval = input[dev].accy / cfg.mouse_throttle;
-				input[dev].accy -= msval * cfg.mouse_throttle;
-
-				//printf("Mouse PosY: %d\n", msval);
-				user_io_mouse(mouse_btn, 0, msval);
-				return;
-			}
-		}
-		break;
-	}
 
 	if (!input[dev].has_map)
 	{
@@ -1568,9 +1572,13 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 				memset(input[dev].map, 0, sizeof(input[dev].map));
 				input[dev].has_map++;
 			}
-
-			//remove system controls from default map
-			for (uint i = 8; i < sizeof(input[0].map) / sizeof(input[0].map[0]); i++) input[dev].map[i] = 0;
+			else
+			{
+				for (uint i = 8; i < sizeof(input[0].map) / sizeof(input[0].map[0]); i++)
+				{
+					input[dev].map[i] = 0;
+				}
+			}
 			input[dev].has_map++;
 		}
 		input[dev].has_map++;
@@ -1587,7 +1595,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 	}
 
 	//mapping
-	if (mapping && (mapping_dev >=0 || ev->value) && !cancel && !enter)
+	if (mapping && (mapping_dev >=0 || ev->value) && !((mapping_type < 2 || !mapping_button) && (cancel || enter)))
 	{
 		if (is_menu_core()) spi_uio_cmd(UIO_KEYBOARD); //ping the Menu core to wakeup
 
@@ -1595,72 +1603,128 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 		{
 			if (mapping_type == 2)
 			{
-				if (ev->value == 1 && ev->code < 256)
+				if (ev->code < 256)
 				{
-					if(mapping_dev < 0)
+					if (ev->value == 1)
 					{
-						mapping_dev = dev;
-						mapping_key = 0;
+						if (mapping_dev < 0)
+						{
+							mapping_dev = dev;
+							mapping_button = 0;
+						}
+
+						if (!mapping_button) mapping_button = ev->code;
 					}
 
-					if (!mapping_key) mapping_key = ev->code;
-					else
+					if (ev->value == 0 && mapping_dev >= 0 && mapping_button && mapping_button != ev->code)
 					{
-						input[mapping_dev].kbdmap[mapping_key] = ev->code;
-						mapping_key = 0;
+						input[mapping_dev].kbdmap[mapping_button] = ev->code;
+						mapping_button = 0;
 					}
 				}
 				return;
 			}
 			else if (mapping_type == 3)
 			{
-				if (ev->value == 1)
+				if (ev->value == 1 && !mapping_button)
 				{
-					if (!mapping_button)
-					{
-						if (mapping_dev < 0) mapping_dev = dev;
-						if (mapping_dev == dev && ev->code < 1024) mapping_button = ev->code;
-					}
-					else if (mapping_dev >= 0 && (ev->code<256 || mapping_dev == dev))
-					{
-						// Technically it's hard to map the key to button as keyboards
-						// are all the same while joysticks are personalized and numbered.
-						input[mapping_dev].jkmap[mapping_button] = ev->code;
-						mapping_button = 0;
-					}
+					if (mapping_dev < 0) mapping_dev = dev;
+					if (mapping_dev == dev && ev->code < 1024) mapping_button = ev->code;
 				}
+				
+				if (ev->value == 0 && mapping_dev >= 0 && (ev->code<256 || mapping_dev == dev) && mapping_button && mapping_button != ev->code)
+				{
+					// Technically it's hard to map the key to button as keyboards
+					// are all the same while joysticks are personalized and numbered.
+					input[mapping_dev].jkmap[mapping_button] = ev->code;
+					mapping_button = 0;
+				}
+				return;
 			}
-			else if ((mapping_dev < 0) || ((ev->code >= 256) ? mapping_type : !mapping_type))
+			else
 			{
-				if (mapping_dev < 0)
+				int clear = ev->code == KEY_F12 || ev->code == KEY_MENU || ev->code == KEY_HOMEPAGE;
+				if (ev->value == 1 && mapping_dev < 0 && !clear)
 				{
 					mapping_dev = dev;
 					mapping_type = (ev->code >= 256) ? 1 : 0;
+					key_mapped = 0;
 				}
 
-				if (mapping_dev == dev && mapping_button < (is_menu_core() ? 17 : mapping_count))
+				mapping_clear = 0;
+				if (mapping_dev >= 0 && (mapping_dev == dev || clear) && mapping_button < (is_menu_core() ? 17 : mapping_count))
 				{
-					if (ev->value == 1)
+					if (ev->value == 1 && !key_mapped)
 					{
-						if (!mapping_button) memset(input[dev].map, 0, sizeof(input[dev].map));
-
-						int found = 0;
-						for (int i = (is_menu_core() && mapping_button >= 8) ? 8 : 0; i < mapping_button; i++) if (input[dev].map[i] == ev->code) found = 1;
-
-						if (!found)
+						if (is_menu_core())
 						{
-							input[dev].map[(mapping_button == 16 && is_menu_core()) ? 16 + mapping_type : mapping_button] = ev->code;
-							key_mapped = ev->code;
+							if (mapping_dev == dev)
+							{
+								if (!mapping_button) memset(input[dev].map, 0, sizeof(input[dev].map));
+
+								int found = 0;
+								for (int i = (mapping_button >= 8) ? 8 : 0; i < mapping_button; i++) if (input[dev].map[i] == ev->code) found = 1;
+
+								if (!found)
+								{
+									input[dev].map[(mapping_button == 16) ? 16 + mapping_type : mapping_button] = ev->code;
+									key_mapped = ev->code;
+
+									//check if analog stick has been used for mouse
+									if (mapping_button == 9 || mapping_button == 11)
+									{
+										if (input[dev].map[mapping_button] >= KEY_EMU &&
+											input[dev].map[mapping_button - 1] >= KEY_EMU &&
+											(input[dev].map[mapping_button - 1] - input[dev].map[mapping_button] == 1) && // same axis
+											absinfo)
+										{
+											input[dev].map[AXIS_MX + (mapping_button - 9)/2] = ((input[dev].map[mapping_button] - KEY_EMU)/2) | 0x20000;
+										}
+									}
+								}
+							}
+						}
+						else
+						{
+							if ((mapping_type && (input[dev].mmap[17] == ev->code)) || clear)
+							{
+								memset(input[mapping_dev].map, 0, sizeof(input[mapping_dev].map));
+								mapping_button = 0;
+								mapping_clear = 1;
+							}
+							else
+							{
+								if (!mapping_button)
+								{
+									for (uint i = 0; i < sizeof(input[0].map) / sizeof(input[0].map[0]); i++)
+									{
+										input[dev].map[i] &= mapping_set ? 0x0000FFFF : 0xFFFF0000;
+									}
+								}
+
+								int found = 0;
+								for (int i = 0; i < mapping_button; i++)
+								{
+									if (mapping_set && (input[dev].map[i] >> 16) == ev->code) found = 1;
+									if (!mapping_set && (input[dev].map[i] & 0xFFFF) == ev->code) found = 1;
+								}
+
+								if (!found)
+								{
+									if (mapping_set) input[dev].map[mapping_button] = (input[dev].map[mapping_button] & 0xFFFF) | (ev->code << 16);
+									else input[dev].map[mapping_button] = (input[dev].map[mapping_button] & 0xFFFF0000) | ev->code;
+									key_mapped = ev->code;
+								}
+							}
 						}
 					}
-					else if(ev->value == 0 && key_mapped == ev->code)
+					else if(mapping_dev == dev && ev->value == 0 && key_mapped == ev->code)
 					{
 						mapping_button++;
 						key_mapped = 0;
 					}
+					return;
 				}
-
-				return;
 			}
 		}
 
@@ -1686,7 +1750,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 				if (ev->type == EV_ABS)
 				{
-					int threshold = (absinfo->maximum - absinfo->minimum) / 10;
+					int threshold = (absinfo->maximum - absinfo->minimum) / 5;
 
 					max = (ev->value >= (absinfo->maximum - threshold));
 					min = (ev->value <= (absinfo->minimum + threshold));
@@ -1775,7 +1839,15 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 		{
 			if (ev->value == 1)
 			{
-				if (idx && mapping_dev >= 0) input[mapping_dev].map[idx] = 0;
+				if (mapping_dev >= 0)
+				{
+					if (idx) input[mapping_dev].map[idx] = 0;
+					else if (mapping_button > 0)
+					{
+						if (is_menu_core()) input[mapping_dev].map[mapping_button] = 0;
+						else input[mapping_dev].map[mapping_button] &= mapping_set ? 0x0000FFFF : 0xFFFF0000;
+					}
+				}
 				mapping_button++;
 				if (mapping_button < 0 && (mapping_button&1)) mapping_button++;
 			}
@@ -1819,7 +1891,13 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 				if (ev->code == input[dev].mmap[17])
 				{
-					if (ev->value <= 1) joy_digital(input[dev].num, 0, 0, ev->value, BTN_OSD);
+					if (ev->value == 1 && input[dev].lightgun_req && !user_io_osd_is_visible())
+					{
+						input[dev].lightgun = !input[dev].lightgun;
+						Info(input[dev].lightgun ? "Light Gun mode is ON" : "Light Gun mode is OFF");
+					}
+					else if (ev->value <= 1) joy_digital(input[dev].num, 0, 0, ev->value, BTN_OSD);
+
 					return;
 				}
 
@@ -1842,6 +1920,20 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 						{
 							joy_digital(0, 0, 0, ev->value, BTN_OSD);
 							return;
+						}
+
+						if (input[dev].mmap[AXIS_X])
+						{
+							uint16_t key = KEY_EMU + ((uint16_t)input[dev].mmap[AXIS_X]*2);
+							if (ev->code == (key + 1)) joy_digital(0, 1 << 0, 0, ev->value, 0);
+							if (ev->code == key) joy_digital(0, 1 << 1, 0, ev->value, 1);
+						}
+
+						if (input[dev].mmap[AXIS_Y])
+						{
+							uint16_t key = KEY_EMU + ((uint16_t)input[dev].mmap[AXIS_Y]*2);
+							if (ev->code == (key + 1)) joy_digital(0, 1 << 2, 0, ev->value, 2);
+							if (ev->code == key) joy_digital(0, 1 << 3, 0, ev->value, 3);
 						}
 					}
 				}
@@ -1872,60 +1964,35 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 								default:
 									mouse_btn = ev->value ? mouse_btn | 1 << (i - 12) : mouse_btn & ~(1 << (i - 12));
-									user_io_mouse(mouse_btn, 0, 0);
+									user_io_mouse(mouse_btn | mice_btn, 0, 0);
 									break;
 								}
 								return;
 							}
 						}
-
-						for (uint i = 0; i < BTN_NUM; i++)
-						{
-							if (ev->code == input[dev].map[i])
-							{
-								if (ev->value <= 1) joy_digital(input[dev].num, 1 << i, 0, ev->value, i);
-								return;
-							}
-						}
 					}
-					else
+
+					if (input[dev].has_map >= 2)
 					{
-						if (input[dev].has_map == 2)
-						{
-							Info("This joystick is not defined\n    Using default map");
-							input[dev].has_map = 1;
-						}
+						Info((input[dev].has_map == 3) ? "This joystick is not defined" : "This joystick is not defined\n    Using default map");
+						input[dev].has_map = 1;
+					}
 
-						if (input[dev].has_map == 3)
+					for (uint i = 0; i < BTN_NUM; i++)
+					{
+						if (ev->code == (input[dev].map[i] & 0xFFFF) || ev->code == (input[dev].map[i] >> 16))
 						{
-							Info("This joystick is not defined");
-							input[dev].has_map = 1;
-						}
+							if (i <= 3 && origcode == ev->code) origcode = 0; // prevent autofire for original dpad
+							if (ev->value <= 1) joy_digital(input[dev].num, 1 << i, origcode, ev->value, i);
 
-						for (uint i = 0; i < BTN_NUM; i++)
-						{
-							if (ev->code == input[dev].map[i])
-							{
-								if (i <= 3 && origcode == ev->code) origcode = 0; // prevent autofire for original dpad
-								if (ev->value <= 1) joy_digital(input[dev].num, 1 << i, origcode, ev->value, i);
-								return;
-							}
-						}
-
-						for (int i = 8; i <= 11; i++)
-						{
-							if (ev->code == input[dev].mmap[i])
-							{
-								if (origcode == ev->code) origcode = 0; // prevent autofire for original dpad
-								if (ev->value <= 1) joy_digital(input[dev].num, 1 << (i - 8), origcode, ev->value, i - 8);
-								return;
-							}
+							// support 2 simultaneous functions for 1 button if defined in 2 sets. No return.
 						}
 					}
 
 					if (ev->code == input[dev].mmap[15] && (ev->value <= 1) && ((!(mouse_emu & 1)) ^ (!ev->value)))
 					{
 						mouse_emu = ev->value ? mouse_emu | 1 : mouse_emu & ~1;
+						if (input[sub_dev].quirk == QUIRK_DS4) ds_mouse_emu = mouse_emu & 1;
 						printf("mouse_emu = %d\n", mouse_emu);
 						if (mouse_emu & 2)
 						{
@@ -1937,7 +2004,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 							mouse_btn = 0;
 							mouse_emu_x = 0;
 							mouse_emu_y = 0;
-							user_io_mouse(0, 0, 0);
+							user_io_mouse(mice_btn, 0, 0);
 						}
 					}
 				}
@@ -2025,7 +2092,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 								default:
 									mouse_btn = ev->value ? mouse_btn | 1 << (i - 12) : mouse_btn & ~(1 << (i - 12));
-									user_io_mouse(mouse_btn, 0, 0);
+									user_io_mouse(mouse_btn | mice_btn, 0, 0);
 									break;
 								}
 								return;
@@ -2050,12 +2117,13 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 							mouse_btn = 0;
 							mouse_emu_x = 0;
 							mouse_emu_y = 0;
-							user_io_mouse(0, 0, 0);
+							user_io_mouse(mice_btn, 0, 0);
 						}
 						return;
 					}
 				}
 
+				if (code == KEY_HOMEPAGE) code = KEY_MENU;
 				user_io_kbd(code, ev->value);
 				return;
 			}
@@ -2065,15 +2133,45 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 		case EV_ABS:
 			if (!user_io_osd_is_visible())
 			{
-				// TODO: implement inversion
+				int hrange = (absinfo->maximum - absinfo->minimum) / 2;
+				int dead = hrange/63;
 
-				//convert to 0..255 range
-				int value = ((ev->value - absinfo->minimum) * 256) / (absinfo->maximum - absinfo->minimum + 1);
-				value = (value < 127 || value>129) ? value - 128 : 0;
+				if (input[sub_dev].quirk == QUIRK_CWIID)
+				{
+					if(ev->code == 3 || ev->code == 4) dead = 10;
+				}
+
+				if (input[sub_dev].quirk == QUIRK_DS3 || input[sub_dev].quirk == QUIRK_DS4)
+				{
+					dead = 10;
+				}
+
+				int value = ev->value;
+				if (ev->value < absinfo->minimum) value = absinfo->minimum;
+				else if (ev->value > absinfo->maximum) value = absinfo->maximum;
+
+				// normalize to -range/2...+range/2
+				value = value - (absinfo->minimum + absinfo->maximum) / 2;
+
+				if (ev->code > 1 || !input[dev].lightgun) //lightgun has no dead zone
+				{
+					// check the dead-zone and remove it from the range
+					hrange -= dead;
+					if (value < -dead) value += dead;
+					else if (value > dead) value -= dead;
+					else value = 0;
+				}
+
+				value = (value * 127) / hrange;
+
+				//final check to eliminate additive error
 				if (value < -127) value = -127;
-				//printf("ABS: axis %d = %d -> %d\n", ev->code, ev->value, value);
+				else if (value > 127) value = 127;
 
-				else if (ev->code == (input[dev].mmap[AXIS_MX] & 0xFFFF) && mouse_emu)
+				if (input[sub_dev].axis_pos[ev->code & 0xFF] == (int8_t)value) break;
+				input[sub_dev].axis_pos[ev->code & 0xFF] = (int8_t)value;
+
+				if (ev->code == (input[dev].mmap[AXIS_MX] & 0xFFFF) && mouse_emu)
 				{
 					mouse_emu_x = 0;
 					if (value < -1 || value>1) mouse_emu_x = value;
@@ -2087,9 +2185,9 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 					mouse_emu_y /= 12;
 					return;
 				}
-				else if (ev->code == (input[dev].mmap[AXIS_X] & 0xFFFF))
+				else if (ev->code == (input[dev].mmap[AXIS_X] & 0xFFFF) || (ev->code == 0 && input[dev].lightgun))
 				{
-					// skip if first joystick is not defined.
+					// skip if joystick is undefined.
 					if (!input[dev].num) break;
 
 					int offset = 0;
@@ -2098,9 +2196,9 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 					joy_analog(input[dev].num, 0, offset);
 					return;
 				}
-				else if (ev->code == (input[dev].mmap[AXIS_Y] & 0xFFFF))
+				else if (ev->code == (input[dev].mmap[AXIS_Y] & 0xFFFF) || (ev->code == 1 && input[dev].lightgun))
 				{
-					// skip if first joystick is not defined.
+					// skip if joystick is undefined.
 					if (!input[dev].num) break;
 
 					int offset = 0;
@@ -2115,72 +2213,168 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 	}
 }
 
-static uint16_t read_hex(char *filename)
-{
-	FILE *in;
-	unsigned int value;
-
-	in = fopen(filename, "rb");
-	if (!in) return 0;
-
-	if (fscanf(in, "%x", &value) == 1)
-	{
-		fclose(in);
-		return (uint16_t)value;
-	}
-	fclose(in);
-	return 0;
-}
-
-static void getVidPid(int num, uint16_t* vid, uint16_t* pid)
-{
-	char name[256];
-	sprintf(name, "/sys/class/input/event%d/device/id/vendor", num);
-	*vid = read_hex(name);
-	sprintf(name, "/sys/class/input/event%d/device/id/product", num);
-	*pid = read_hex(name);
-}
-
-static struct pollfd pool[NUMDEV + 1];
+static struct pollfd pool[NUMDEV + 2];
 
 int input_test(int getchar)
 {
-	static char   cur_leds = 0;
-	static int    state = 0;
+	static char cur_leds = 0;
+	static int state = 0;
 	struct input_absinfo absinfo;
-
-	char devname[20];
 	struct input_event ev;
 
 	if (state == 0)
 	{
+		memset(pool, -1, sizeof(pool));
+
 		signal(SIGINT, INThandler);
 		pool[NUMDEV].fd = set_watch();
 		pool[NUMDEV].events = POLLIN;
+
+		pool[NUMDEV+1].fd = open("/dev/input/mice", O_RDWR);
+		pool[NUMDEV+1].events = POLLIN;
+
+		/*
+		// enable scroll wheel reading through /dev/input/mice
+		unsigned char buffer[4];
+		static const unsigned char mousedev_imps_seq[] = { 0xf3, 200, 0xf3, 100, 0xf3, 80 };
+		if (write(pool[NUMDEV + 1].fd, mousedev_imps_seq, sizeof(mousedev_imps_seq)) != sizeof(mousedev_imps_seq))
+		{
+			printf("Cannot switch to ImPS/2 protocol(1).\n");
+		}
+		else if (read(pool[NUMDEV + 1].fd, buffer, sizeof buffer) != 1 || buffer[0] != 0xFA)
+		{
+			printf("Failed to switch to ImPS/2 protocol(2).\n");
+		}
+		*/
 		state++;
 	}
 
 	if (state == 1)
 	{
 		printf("Open up to %d input devices.\n", NUMDEV);
-		for (int i = 0; i<NUMDEV; i++)
+		for (int i = 0; i < NUMDEV; i++)
 		{
-			sprintf(devname, "/dev/input/event%d", i);
-			pool[i].fd = open(devname, O_RDWR);
-			pool[i].events = POLLIN;
-			memset(&input[i], 0, sizeof(input[i]));
-			input[i].led = has_led(pool[i].fd);
-			if (pool[i].fd > 0) getVidPid(i, &input[i].vid, &input[i].pid);
-			if (pool[i].fd > 0) printf("opened %s (%04x:%04x)\n", devname, input[i].vid, input[i].pid);
+			pool[i].fd = -1;
+			pool[i].events = 0;
 		}
 
+		int n = 0;
+		DIR *d = opendir("/dev/input");
+		if (d)
+		{
+			struct input_id id;
+			struct dirent *de;
+			while ((de = readdir(d)))
+			{
+				if (!strncmp(de->d_name, "event", 5))
+				{
+					memset(&input[n], 0, sizeof(input[n]));
+					sprintf(input[n].devname, "/dev/input/%s", de->d_name);
+					int fd = open(input[n].devname, O_RDWR);
+					printf("open(%s): %d\n", input[n].devname, fd);
+
+					if (fd > 0)
+					{
+						pool[n].fd = fd;
+						pool[n].events = POLLIN;
+						input[n].led = has_led(pool[n].fd);
+
+						memset(&id, 0, sizeof(id));
+						ioctl(pool[n].fd, EVIOCGID, &id);
+						input[n].vid = id.vendor;
+						input[n].pid = id.product;
+
+						ioctl(pool[n].fd, EVIOCGUNIQ(sizeof(input[n].uniq)), input[n].uniq);
+						ioctl(pool[n].fd, EVIOCGNAME(sizeof(input[n].name)), input[n].name);
+						input[n].bind = -1;
+						if (strcasestr(input[n].name, "Wiimote") && input[n].vid == 1 && input[n].pid == 1)
+						{
+							input[n].quirk = QUIRK_CWIID;
+							input[n].lightgun = 1;
+						}
+
+						if (input[n].vid == 0x054c)
+						{
+							if (input[n].pid == 0x0268)  input[n].quirk = QUIRK_DS3;
+							else if (input[n].pid == 0x05c4 || input[n].pid == 0x09cc)
+							{
+								input[n].quirk = QUIRK_DS4;
+								if (strcasestr(input[n].name, "Touchpad"))
+								{
+									input[n].quirk = QUIRK_DS4TOUCH;
+								}
+							}
+						}
+
+						if (input[n].vid == 0x0079 && input[n].pid == 0x1802)
+						{
+							strcpy(input[n].uniq, "Mayflash 1802");
+							input[n].lightgun = 1;
+							input[n].num = 2; // force mayflash mode 1/2 as second joystick.
+						}
+
+						if (input[n].vid == 0x057e && (input[n].pid == 0x0306 || input[n].pid == 0x0330))
+						{
+							if (strcasestr(input[n].name, "Accelerometer"))
+							{
+								// don't use Accelerometer
+								close(pool[n].fd);
+								continue;
+							}
+							else if (strcasestr(input[n].name, "Motion Plus"))
+							{
+								// don't use Accelerometer
+								close(pool[n].fd);
+								continue;
+							}
+							else
+							{
+								input[n].quirk = QUIRK_WIIMOTE;
+							}
+						}
+
+						// Raphnet devices: clear uniq to prevent merging the ports
+						if (input[n].vid == 0x289b)
+						{
+							memset(input[n].uniq, 0, sizeof(input[n].uniq));
+						}
+
+						n++;
+						if (n >= NUMDEV) break;
+					}
+				}
+			}
+			closedir(d);
+
+			// merge multifunctional devices using uniq field
+			for (int i = 0; i < n; i++)
+			{
+				input[i].bind = i;
+				if (input[i].uniq[0])
+				{
+					for (int j = 0; j < i; j++)
+					{
+						if (!memcmp(input[i].uniq, input[j].uniq, sizeof(input[0].uniq)))
+						{
+							input[i].bind = j;
+							break;
+						}
+					}
+				}
+			}
+
+			for (int i = 0; i < n; i++)
+			{
+				printf("opened %d(%2d): %s (%04x:%04x) %d \"%s\" \"%s\"\n", i, input[i].bind, input[i].devname, input[i].vid, input[i].pid, input[i].quirk, input[i].uniq, input[i].name);
+			}
+		}
 		cur_leds |= 0x80;
 		state++;
 	}
 
 	if (state == 2)
 	{
-		int return_value = poll(pool, NUMDEV + 1, 0);
+		int return_value = poll(pool, NUMDEV + 2, 0);
 		if (return_value < 0)
 		{
 			printf("ERR: poll\n");
@@ -2190,10 +2384,7 @@ int input_test(int getchar)
 			if ((pool[NUMDEV].revents & POLLIN) && check_devs())
 			{
 				printf("Close all devices.\n");
-				for (int i = 0; i<NUMDEV; i++)
-				{
-					if (pool[i].fd >= 0) close(pool[i].fd);
-				}
+				for (int i = 0; i<NUMDEV; i++) if (pool[i].fd >= 0) close(pool[i].fd);
 				state = 1;
 				return 0;
 			}
@@ -2214,13 +2405,117 @@ int input_test(int getchar)
 						}
 						else if(ev.type)
 						{
+							int dev = i;
+							if (input[dev].bind >= 0) dev = input[dev].bind;
+
+							int noabs = 0;
+
+							if (input[i].quirk == QUIRK_DS4TOUCH && ev.type == EV_KEY)
+							{
+								if (ev.code == BTN_TOOL_FINGER || ev.code == BTN_TOUCH || ev.code == BTN_TOOL_DOUBLETAP) continue;
+							}
+
 							if (ev.type == EV_ABS)
 							{
-								int len = ioctl(pool[i].fd, EVIOCGABS(ev.code), &absinfo);
-								if (len < 0)
+								if (input[i].quirk == QUIRK_WIIMOTE)
 								{
-									memset(&absinfo, 0, sizeof(absinfo));
+									//nunchuck accel events
+									if(ev.code >= 3 && ev.code <= 5) continue;
 								}
+
+								//Dualshock: drop accelerator and raw touchpad events
+								if (input[i].quirk == QUIRK_DS4TOUCH && ev.code == 57)
+								{
+									input[dev].lightgun_req = (ev.value >= 0);
+								}
+
+								if ((input[i].quirk == QUIRK_DS4TOUCH || input[i].quirk == QUIRK_DS4 || input[i].quirk == QUIRK_DS3) && ev.code > 40)
+								{
+									continue;
+								}
+
+								if (ioctl(pool[i].fd, EVIOCGABS(ev.code), &absinfo) < 0) memset(&absinfo, 0, sizeof(absinfo));
+								else
+								{
+									//DS4 specific: touchpad as lightgun
+									if (input[i].quirk == QUIRK_DS4TOUCH && ev.code <= 1)
+									{
+										if (!input[dev].lightgun || user_io_osd_is_visible()) continue;
+
+										if (ev.code == 1)
+										{
+											absinfo.minimum = 300;
+											absinfo.maximum = 850;
+										}
+										else if (ev.code == 0)
+										{
+											absinfo.minimum = 200;
+											absinfo.maximum = 1720;
+										}
+										else continue;
+									}
+
+									if (input[i].quirk == QUIRK_DS4 && ev.code <= 1)
+									{
+										if (input[dev].lightgun) noabs = 1;
+									}
+
+									if (input[i].quirk == QUIRK_WIIMOTE)
+									{
+										input[dev].lightgun = 0;
+										if (absinfo.maximum == 1023 || absinfo.maximum == 767)
+										{
+											if (user_io_osd_is_visible()) continue;
+											if (ev.code == 16)
+											{
+												ev.value = absinfo.maximum - ev.value;
+												ev.code = 0;
+												input[dev].lightgun = 1;
+											}
+											else if (ev.code == 17)
+											{
+												ev.code = 1;
+												input[dev].lightgun = 1;
+											}
+											// other 3 IR tracking aren't used
+											else continue;
+										}
+										else if (absinfo.maximum == 62)
+										{
+											//LT/RT analog
+											continue;
+										}
+										else if(ev.code & 1)
+										{
+											//Y axes on wiimote and accessories are inverted
+											ev.value = -ev.value;
+										}
+									}
+								}
+
+								if (input[i].quirk == QUIRK_CWIID)
+								{
+									if (ev.code == 3 || ev.code == 4)
+									{
+										absinfo.minimum = 30;
+										absinfo.maximum = 225;
+									}
+								}
+							}
+
+							//Menu combo on 8BitDo receiver in PSC mode
+							if (input[dev].vid == 0x054c && input[dev].pid == 0x0cda && ev.type == EV_KEY)
+							{
+								//in PSC mode these keys coming from separate virtual keyboard device
+								//so it's impossible to use joystick codes as keyboards aren't personalized
+								if (ev.code == 164) ev.code = KEY_MENU;
+								if (ev.code == 1)   ev.code = KEY_MENU;
+							}
+
+							//Menu button quirk of 8BitDo gamepad in X-Input mode
+							if (input[dev].vid == 0x045e && input[dev].pid == 0x02e0 && ev.type == EV_KEY)
+							{
+								if (ev.code == KEY_MENU) ev.code = BTN_MODE;
 							}
 
 							if (is_menu_core())
@@ -2256,12 +2551,11 @@ int input_test(int getchar)
 								{
 								//keyboard, buttons
 								case EV_KEY:
-									printf("Input event: type=EV_KEY, code=%d(0x%x), value=%d, jnum=%d, ID:%04x:%04x\n", ev.code, ev.code, ev.value, input[i].num, input[i].vid, input[i].pid);
+									printf("Input event: type=EV_KEY, code=%d(0x%x), value=%d, jnum=%d, ID:%04x:%04x:%02d\n", ev.code, ev.code, ev.value, input[dev].num, input[dev].vid, input[dev].pid, i);
 									break;
 
-								//mouse
 								case EV_REL:
-									printf("Input event: type=EV_REL, Axis=%d, Offset:=%d, jnum=%d, ID:%04x:%04x\n", ev.code, ev.value, input[i].num, input[i].vid, input[i].pid);
+									printf("Input event: type=EV_REL, Axis=%d, Offset=%d, jnum=%d, ID:%04x:%04x:%02d\n", ev.code, ev.value, input[dev].num, input[dev].vid, input[dev].pid, i);
 									break;
 
 								case EV_SYN:
@@ -2270,67 +2564,70 @@ int input_test(int getchar)
 
 								//analog joystick
 								case EV_ABS:
-									if (ev.code == 62) break;
-									if (ev.code == 61) break; //ps3 accel axis
-									if (ev.code == 60) break; //ps3 accel axis
-									if (ev.code == 59) break; //ps3 accel axis
-
-									//reduce flood from PS3 gamepad
-									if (input[i].vid == 0x054c && input[i].pid == 0x0268)
-									{ if (ev.code <= 5 && ev.value > 118 && ev.value < 138) break; }
+									//reduce flood from DUALSHOCK 3/4
+									if ((input[i].quirk == QUIRK_DS4 || input[i].quirk == QUIRK_DS3) && ev.code <= 5 && ev.value > 118 && ev.value < 138)
+									{
+										break;
+									}
 
 									//aliexpress USB encoder floods messages
-									if (input[i].vid == 0x0079 && input[i].pid == 0x0006)
-									{ if (ev.code == 2) break; }
+									if (input[dev].vid == 0x0079 && input[dev].pid == 0x0006)
+									{
+										if (ev.code == 2) break;
+									}
 
-									printf("Input event: type=EV_ABS, Axis=%d, Offset:=%d, jnum=%d, ID:%04x:%04x.", ev.code, ev.value, input[i].num, input[i].vid, input[i].pid);
-									printf(" ABS_INFO: min = %d max = %d", absinfo.minimum, absinfo.maximum);
-									if (absinfo.fuzz) printf(" fuzz = %d", absinfo.fuzz);
-									if (absinfo.resolution) printf(" res = %d", absinfo.resolution);
+									printf("Input event: type=EV_ABS, Axis=%d, Offset=%d, jnum=%d, ID:%04x:%04x:%02d,", ev.code, ev.value, input[dev].num, input[dev].vid, input[dev].pid, i);
+									printf(" abs_min = %d, abs_max = %d", absinfo.minimum, absinfo.maximum);
+									if (absinfo.fuzz) printf(", fuzz = %d", absinfo.fuzz);
+									if (absinfo.resolution) printf(", res = %d", absinfo.resolution);
 									printf("\n");
 									break;
 
 								default:
-									printf("Input event: type=%d, code=%d(0x%x), value=%d(0x%x), jnum=%d, ID:%04x:%04x\n", ev.type, ev.code, ev.code, ev.value, ev.value, input[i].num, input[i].vid, input[i].pid);
+									printf("Input event: type=%d, code=%d(0x%x), value=%d(0x%x), jnum=%d, ID:%04x:%04x:%02d\n", ev.type, ev.code, ev.code, ev.value, ev.value, input[dev].num, input[dev].vid, input[dev].pid, i);
 								}
 							}
 
-							//Menu combo on 8BitDo receiver in PSC mode
-							if (input[i].vid == 0x054c && input[i].pid == 0x0cda && ev.type == EV_KEY)
+							if (input[i].quirk == QUIRK_CWIID && ev.type == EV_ABS)
 							{
-								if (ev.code == 164) ev.code = KEY_MENU;
-								if (ev.code == 1)   ev.code = KEY_MENU;
+								if (ev.code <= 1 && user_io_osd_is_visible())
+								{
+									// don't pass IR tracking to OSD
+									continue;
+								}
 							}
 
-							input_cb(&ev, &absinfo, i);
+							if(!noabs) input_cb(&ev, &absinfo, i);
 
 							//sumulate digital directions from analog
-							if (ev.type == EV_ABS && !(mapping && mapping_type<=1 && mapping_button<-4))
+							if (ev.type == EV_ABS && !(mapping && mapping_type<=1 && mapping_button<-4) && !(ev.code<=1 && input[dev].lightgun))
 							{
-								uint8_t axis_state = 0;
+								input_absinfo *pai = 0;
+								uint8_t axis_edge = 0;
 								if ((absinfo.maximum == 1 && absinfo.minimum == -1) || (absinfo.maximum == 2 && absinfo.minimum == 0))
 								{
-									if (ev.value == absinfo.minimum) axis_state = 1;
-									if (ev.value == absinfo.maximum) axis_state = 2;
+									if (ev.value == absinfo.minimum) axis_edge = 1;
+									if (ev.value == absinfo.maximum) axis_edge = 2;
 								}
 								else
 								{
+									pai = &absinfo;
 									int range = absinfo.maximum - absinfo.minimum + 1;
 									int center = absinfo.minimum + (range / 2);
 									int treshold = range / 4;
 
 									int only_max = 1;
-									for (int n = 0; n < 4; n++) if (input[i].mmap[AXIS1_X + n] && ((input[i].mmap[AXIS1_X + n] & 0xFFFF) == ev.code)) only_max = 0;
+									for (int n = 0; n < 4; n++) if (input[dev].mmap[AXIS1_X + n] && ((input[dev].mmap[AXIS1_X + n] & 0xFFFF) == ev.code)) only_max = 0;
 
-									if (ev.value < center - treshold && !only_max) axis_state = 1;
-									if (ev.value > center + treshold) axis_state = 2;
+									if (ev.value < center - treshold && !only_max) axis_edge = 1;
+									if (ev.value > center + treshold) axis_edge = 2;
 								}
 
-								uint8_t last_state = input[i].axis_state[ev.code & 255];
-								input[i].axis_state[ev.code & 255] = axis_state;
+								uint8_t last_state = input[dev].axis_edge[ev.code & 255];
+								input[dev].axis_edge[ev.code & 255] = axis_edge;
 
-								//printf("last_state=%d, axis_state=%d\n", last_state, axis_state);
-								if (last_state != axis_state)
+								//printf("last_state=%d, axis_edge=%d\n", last_state, axis_edge);
+								if (last_state != axis_edge)
 								{
 									uint16_t ecode = KEY_EMU + (ev.code << 1) - 1;
 									ev.type = EV_KEY;
@@ -2338,27 +2635,57 @@ int input_test(int getchar)
 									{
 										ev.value = 0;
 										ev.code = ecode + last_state;
-										input_cb(&ev, 0, i);
+										input_cb(&ev, pai, i);
 									}
 
-									if (axis_state)
+									if (axis_edge)
 									{
 										ev.value = 1;
-										ev.code = ecode + axis_state;
-										input_cb(&ev, 0, i);
+										ev.code = ecode + axis_edge;
+										input_cb(&ev, pai, i);
 									}
 								}
 
 								// Menu button on 8BitDo Receiver in D-Input mode
-								if (ev.code == 9 && input[i].vid == 0x2dc8 && (input[i].pid == 0x3100 || input[i].pid == 0x3104))
+								if (ev.code == 9 && input[dev].vid == 0x2dc8 && (input[dev].pid == 0x3100 || input[dev].pid == 0x3104))
 								{
 									ev.type = EV_KEY;
 									ev.code = KEY_EMU + (ev.code << 1);
-									input_cb(&ev, &absinfo, i);
+									input_cb(&ev, pai, i);
 								}
 							}
 						}
 					}
+				}
+			}
+
+			if ((pool[NUMDEV + 1].fd >= 0) && (pool[NUMDEV + 1].revents & POLLIN))
+			{
+				uint8_t data[4] = {};
+				static int accx = 0, accy = 0;
+				if (read(pool[NUMDEV + 1].fd, data, sizeof(data)))
+				{
+					int xval, yval, throttle = 1;
+					xval = ((data[0] & 0x10) ? -256 : 0) | data[1];
+					yval = ((data[0] & 0x20) ? -256 : 0) | data[2];
+
+					if (is_menu_core()) printf("Combined mouse event: btn=0x%02X, dx=%d, dy=%d, scroll=%d\n", data[0], xval, yval, data[3]);
+
+					if (cfg.mouse_throttle) throttle = cfg.mouse_throttle;
+					if (ds_mouse_emu) throttle *= 4;
+
+					accx += xval;
+					xval = accx / throttle;
+					accx -= xval * throttle;
+
+					accy -= yval;
+					yval = accy / throttle;
+					accy -= yval * throttle;
+
+					mice_btn = data[0] & 7;
+					if (ds_mouse_emu) mice_btn = (mice_btn & 4) | ((mice_btn & 1)<<1);
+
+					user_io_mouse(mouse_btn | mice_btn, xval, yval);
 				}
 			}
 		}
@@ -2418,7 +2745,7 @@ int input_poll(int getchar)
 				if (dy < -2) dy = -2;
 			}
 
-			user_io_mouse(mouse_btn, dx, dy);
+			user_io_mouse(mouse_btn | mice_btn, dx, dy);
 			prev_dx = mouse_emu_x;
 			prev_dy = mouse_emu_y;
 		}
@@ -2499,5 +2826,5 @@ void input_notify_mode()
 	mouse_btn = 0;
 	mouse_emu_x = 0;
 	mouse_emu_y = 0;
-	user_io_mouse(0, 0, 0);
+	user_io_mouse(mice_btn, 0, 0);
 }

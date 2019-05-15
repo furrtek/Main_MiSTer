@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 
+#include "lib/lodepng/lodepng.h"
 #include "hardware.h"
 #include "osd.h"
 #include "user_io.h"
@@ -26,6 +27,9 @@
 #include "tzx2wav.h"
 #include "bootcore.h"
 #include "charrom.h"
+#include "scaler.h"
+#include "miniz.h"
+#include "cheats.h"
 
 #include "support.h"
 
@@ -121,6 +125,16 @@ uint32_t bcd_2_dec(uint32_t a)
 		scale *= 10;
 	}
 	return result;
+
+static char last_filename[1024] = {};
+void user_io_store_filename(char *filename)
+{
+	char *p = strrchr(filename, '/');
+	if (p) strcpy(last_filename, p + 1);
+	else strcpy(last_filename, filename);
+
+	p = strrchr(last_filename, '.');
+	if (p) *p = 0;
 }
 
 const char *get_image_name(int i)
@@ -345,6 +359,8 @@ int user_io_get_joy_transl()
 	return joy_transl;
 }
 
+static int use_cheats = 0;
+
 static void parse_config()
 {
 	int i = 0;
@@ -359,8 +375,12 @@ static void parse_config()
 		{
 			OsdCoreNameSet(p);
 		}
+
 		if (i>=2 && p && p[0])
 		{
+			//skip Disable/Hide masks
+			while((p[0] == 'H' || p[0] == 'D') && strlen(p)>=2) p += 2;
+
 			if (p[0] == 'J')
 			{
 				int n = 1;
@@ -409,6 +429,11 @@ static void parse_config()
 				strcat(s, " ");
 				substrcpy(s + strlen(s), p, 1);
 				OsdCoreNameSet(s);
+			}
+
+			if (p[0] == 'C')
+			{
+				use_cheats = 1;
 			}
 		}
 		i++;
@@ -663,6 +688,9 @@ void user_io_init(const char *path)
 							}
 						}
 					}
+
+					// cheats for boot file
+					if (user_io_use_cheats()) cheats_init("", user_io_get_file_crc());
 				}
 
 				if (is_cpc_core())
@@ -1344,6 +1372,17 @@ static void send_pcolchr(const char* name, unsigned char index, int type)
 	}
 }
 
+static uint32_t file_crc;
+uint32_t user_io_get_file_crc()
+{
+	return file_crc;
+}
+
+int user_io_use_cheats()
+{
+	return use_cheats;
+}
+
 int user_io_file_tx(const char* name, unsigned char index, char opensave, char mute, char composite)
 {
 	fileTYPE f = {};
@@ -1405,12 +1444,16 @@ int user_io_file_tx(const char* name, unsigned char index, char opensave, char m
 			spi_write(buf, 512, fio_size);
 			DisableFpga();
 
+			//strip original SNES ROM header if present (not used)
 			if (bytes2send & 512)
 			{
 				bytes2send -= 512;
 				FileReadSec(&f, buf);
 			}
 		}
+
+		file_crc = 0;
+		uint32_t skip = bytes2send & 0x3FF; // skip possible header up to 1023 bytes
 
 		while (bytes2send)
 		{
@@ -1426,8 +1469,16 @@ int user_io_file_tx(const char* name, unsigned char index, char opensave, char m
 			DisableFpga();
 
 			bytes2send -= chunk;
+
+			if (skip >= chunk) skip -= chunk;
+			else
+			{
+				file_crc = crc32(file_crc, buf + skip, chunk - skip);
+				skip = 0;
+			}
 		}
 		printf("\n");
+		printf("CRC32: %08X\n", file_crc);
 	}
 
 	FileClose(&f);
@@ -1540,6 +1591,7 @@ void user_io_send_buttons(char force)
 	if (cfg.forced_scandoubler) map |= CONF_FORCED_SCANDOUBLER;
 	if (cfg.hdmi_audio_96k) map |= CONF_AUDIO_96K;
 	if (cfg.dvi) map |= CONF_DVI;
+	if (cfg.hdmi_limited) map |= CONF_HDMI_LIMITED;
 
 	if ((map != key_map) || force)
 	{
@@ -2856,6 +2908,40 @@ void user_io_kbd(uint16_t key, int press)
 {
 	if(is_menu_core()) spi_uio_cmd(UIO_KEYBOARD); //ping the Menu core to wakeup
 
+	// Win+PrnScr or Alt/Win+ScrLk - screen shot
+	if ((key == KEY_SYSRQ && (get_key_mod() & (RGUI | LGUI))) || (key == KEY_SCROLLLOCK && (get_key_mod() & (LALT | RALT | RGUI | LGUI))))
+	{
+		if (press == 1)
+		{
+			printf("print key pressed - do screen shot\n");
+			mister_scaler *ms = mister_scaler_init();
+			if (ms == NULL)
+			{
+				printf("problem with scaler, maybe not a new enough version\n");
+				Info("Scaler not compatible");
+			}
+			else
+			{
+				unsigned char *outputbuf = (unsigned char *)calloc(ms->width*ms->height * 3, 1);
+				mister_scaler_read(ms, outputbuf);
+				static char filename[1024];
+				FileGenerateScreenshotName(last_filename, filename, 1024);
+				unsigned error = lodepng_encode24_file(getFullPath(filename), outputbuf, ms->width, ms->height);
+				if (error) {
+					printf("error %u: %s\n", error, lodepng_error_text(error));
+					printf("%s", filename);
+					Info("error in saving png");
+				}
+				free(outputbuf);
+				mister_scaler_free(ms);
+				char msg[1024];
+				snprintf(msg, 1024, "Screen saved to\n%s", filename + strlen(SCREENSHOT_DIR"/"));
+				Info(msg);
+			}
+		}
+
+	}
+	else 
 	if (key == KEY_MUTE)
 	{
 		if (press == 1 && hasAPI1_5()) set_volume(0);
@@ -2887,11 +2973,6 @@ void user_io_kbd(uint16_t key, int press)
 		PrintDirectory();
 	}
 	else
-	if ((core_type == CORE_TYPE_MINIMIG2) ||
-		(core_type == CORE_TYPE_MIST) ||
-		(core_type == CORE_TYPE_ARCHIE) ||
-		(core_type == CORE_TYPE_SHARPMZ) ||
-		(core_type == CORE_TYPE_8BIT))
 	{
 		if (key)
 		{

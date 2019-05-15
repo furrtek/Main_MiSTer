@@ -133,6 +133,15 @@
     <ClCompile Include="charrom.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="cheats.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\lodepng\lodepng.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="scaler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="battery.h">
@@ -265,6 +274,15 @@
       <Filter>Header Files\miniz</Filter>
     </ClInclude>
     <ClInclude Include="bootcore.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="cheats.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="lib\lodepng\lodepng.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="scaler.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

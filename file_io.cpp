@@ -33,8 +33,8 @@ typedef std::vector<dirent> DirentVector;
 static const size_t YieldIterations = 128;
 
 DirentVector DirItem;
-int iSelectedEntry = 0;       // selected entry index
-int iFirstEntry = 0;
+static int iSelectedEntry = 0;       // selected entry index
+static int iFirstEntry = 0;
 
 static char full_path[2100];
 
@@ -71,7 +71,7 @@ static char* make_fullpath(const char *path, int mode = 0)
 	}
 	else
 	{
-		sprintf(full_path, path);
+		sprintf(full_path, "%s",path);
 	}
 
 	return full_path;
@@ -624,13 +624,40 @@ int FileCanWrite(const char *name)
 	return ((st.st_mode & S_IWUSR) != 0);
 }
 
-void FileGenerateSavePath(const char *name, char* out_name)
+static void create_path(const char *base_dir, const char* sub_dir)
 {
-	make_fullpath(SAVE_DIR);
+	make_fullpath(base_dir);
 	mkdir(full_path, S_IRWXU | S_IRWXG | S_IRWXO);
 	strcat(full_path, "/");
-	strcat(full_path, HomeDir);
+	strcat(full_path, sub_dir);
 	mkdir(full_path, S_IRWXU | S_IRWXG | S_IRWXO);
+}
+
+void FileGenerateScreenshotName(const char *name, char *out_name, int buflen)
+{
+	create_path(SCREENSHOT_DIR, HomeDir);
+
+	time_t t = time(NULL);
+	struct tm tm = *localtime(&t);
+	char datecode[32] = {};
+	if (tm.tm_year >= 119) // 2019 or up considered valid time
+	{
+		strftime(datecode, 31, "%Y%m%d_%H%M%S", &tm);
+		snprintf(out_name, buflen, "%s/%s/%s-%s.png", SCREENSHOT_DIR, HomeDir, datecode, name[0] ? name : SCREENSHOT_DEFAULT);
+	}
+	else
+	{
+		for (int i = 1; i < 10000; i++)
+		{
+			snprintf(out_name, buflen, "%s/%s/NODATE-%s_%04d.png", SCREENSHOT_DIR, HomeDir, name[0] ? name : SCREENSHOT_DEFAULT, i);
+			if (!getFileType(out_name)) return;
+		}
+	}
+}
+
+void FileGenerateSavePath(const char *name, char* out_name)
+{
+	create_path(SAVE_DIR, HomeDir);
 
 	sprintf(out_name, "%s/%s/", SAVE_DIR, HomeDir);
 	char *fname = out_name + strlen(out_name);
