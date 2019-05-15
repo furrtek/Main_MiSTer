@@ -2097,6 +2097,7 @@ void user_io_poll()
 							case 0x48: {
 								// Added this, Neo CD always requests by MSF (furrtek)
 								if ((req_type & 0xFF) == 0x01) {
+									printf("Neo CD requested raw lba value (MSF): 0x%08X\n", lba);
 									uint8_t m = bcd_2_dec((lba & 0xFF0000) >> 16);
 									uint8_t s = bcd_2_dec((lba & 0xFF00) >> 8);
 									uint8_t f = bcd_2_dec((lba & 0xFF) >> 0);
