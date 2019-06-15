@@ -21,34 +21,27 @@ static void spi_en(uint32_t mask, uint32_t en)
 uint16_t spi_w(uint16_t word)
 {
 	uint32_t gpo = (fpga_gpo_read() & ~(0xFFFF | SSPI_STROBE)) | word;
+	
+	if (fpga_gpi_read() < 0)
+	{
+		printf("GPI[31]==1. FPGA is uninitialized?\n");
+		return 0;
+	}
 
 	fpga_gpo_write(gpo);
 	fpga_gpo_write(gpo | SSPI_STROBE);
 
-	int gpi;
 	do
 	{
-		gpi = fpga_gpi_read();
-		if (gpi < 0)
-		{
-			printf("GPI[31]==1. FPGA is uninitialized?\n");
-			return 0;
-		}
-	} while (!(gpi & SSPI_ACK));
+	} while (!(fpga_gpi_read() & SSPI_ACK));
 
 	fpga_gpo_write(gpo);
 
 	do
 	{
-		gpi = fpga_gpi_read();
-		if (gpi < 0)
-		{
-			printf("GPI[31]==1. FPGA is uninitialized?\n");
-			return 0;
-		}
-	} while (gpi & SSPI_ACK);
+	} while (fpga_gpi_read() & SSPI_ACK);
 
-	return (uint16_t)gpi;
+	return (uint16_t)fpga_gpi_read();
 }
 
 void spi_init(int enable)
@@ -282,6 +275,8 @@ void spi_read(uint8_t *addr, uint16_t len, int wide)
 		while (len--) *addr++ = spi_b(0);
 	}
 }
+
+uint16_t spi_fast(uint16_t *addr, uint16_t len);
 
 void spi_write(const uint8_t *addr, uint16_t len, int wide)
 {

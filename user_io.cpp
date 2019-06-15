@@ -125,6 +125,7 @@ uint32_t bcd_2_dec(uint32_t a)
 		scale *= 10;
 	}
 	return result;
+}
 
 static char last_filename[1024] = {};
 void user_io_store_filename(char *filename)

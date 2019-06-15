@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <time.h>   // clock_gettime, CLOCK_REALTIME
 #include "graphics.h"
 #include "loader.h"
 #include "../../sxmlc.h"
@@ -37,6 +38,8 @@ int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_
 	uint8_t buf_out[4096];
 	static char name_buf[256];
 	unsigned long bytes2send = size;
+	struct timespec ts1, ts2;	// DEBUG PROFILING
+	long us_acc = 0;	// DEBUG PROFILING
 
 	if (!bytes2send) return 0;
 
@@ -67,7 +70,7 @@ int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_
 	while (bytes2send)
 	{
 		uint16_t chunk = (bytes2send > sizeof(buf)) ? sizeof(buf) : bytes2send;
-
+		
 		FileReadAdv(&f, buf, chunk);
 		
 		EnableFpga();
@@ -78,12 +81,22 @@ int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_
 		} else if (neo_file_type == NEO_FILE_8BIT) {
 			spi_write(buf, chunk, 0);
 		} else {
+
 			if (neo_file_type == NEO_FILE_FIX)
 				fix_convert(buf, buf_out, sizeof(buf_out));
 			else if (neo_file_type == NEO_FILE_SPR)
 				spr_convert(buf, buf_out, sizeof(buf_out));
 			
-			spi_write(buf_out, chunk, 1);
+			clock_gettime(CLOCK_REALTIME, &ts1);	// DEBUG PROFILING
+				spi_write(buf_out, chunk, 1);
+			clock_gettime(CLOCK_REALTIME, &ts2);	// DEBUG PROFILING
+
+			if (ts2.tv_nsec < ts1.tv_nsec) {	// DEBUG PROFILING
+				ts2.tv_nsec += 1000000000;
+				ts2.tv_sec--;
+			}
+ 
+			us_acc += ((ts2.tv_nsec - ts1.tv_nsec) / 1000);	// DEBUG PROFILING
 		}
 
 		DisableFpga();
@@ -91,6 +104,12 @@ int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_
 		neogeo_osd_progress(name, 256 - ((bytes2send << 8) / size));
 		bytes2send -= chunk;
 	}
+
+	// DEBUG PROFILING
+	printf("Gfx spi_write us total: %09ld\n", us_acc);
+	// mslug all C ROMs:
+	// spr_convert: 37680*4 = 150720us = 0.150s
+	// spi_write: 2300766*4 = 9203064us = 9.2s !
 
 	FileClose(&f);
 
@@ -174,17 +193,26 @@ static int xml_load_files(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, co
 	static int in_file = 0;
 	static unsigned char file_index = 0;
 	static char file_type = 0;
-	static unsigned long int file_offset= 0, file_size = 0;
+	static unsigned long int file_offset = 0, file_size = 0;
+	static unsigned char hw_type = 0, use_pcm = 0;
 
 	switch (evt)
 	{
 	case XML_EVENT_START_NODE:
 		if (!strcasecmp(node->tag, "romset")) {
-			if (!strcasecmp(node->attributes[0].value, romset)) {
-				printf("Romset %s found !\n", romset);
-				in_correct_romset = 1;
-			} else {
-				in_correct_romset = 0;
+			for (int i = 0; i < node->n_attributes; i++) {
+				if (!strcasecmp(node->attributes[i].name, "name")) {
+					if (!strcasecmp(node->attributes[i].value, romset)) {
+						printf("Romset %s found !\n", romset);
+						in_correct_romset = 1;
+					} else {
+						in_correct_romset = 0;
+					}
+				} else if (!strcasecmp(node->attributes[i].name, "hw")) {
+					hw_type = atoi(node->attributes[i].value);
+				} else if (!strcasecmp(node->attributes[i].name, "pcm")) {
+					use_pcm = atoi(node->attributes[i].value);
+				}
 			}
 		}
 		if (in_correct_romset) {
@@ -222,6 +250,10 @@ static int xml_load_files(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, co
 	case XML_EVENT_END_NODE:
 		if (in_correct_romset) {
 			if (!strcasecmp(node->tag, "romset")) {
+					printf("Setting cart hardware type to %u\n", hw_type);
+					user_io_8bit_set_status(((uint32_t)hw_type & 3) << 24, 0x03000000);
+					printf("Setting cart to%s use the PCM chip\n", use_pcm ? "" : " not");
+					user_io_8bit_set_status(((uint32_t)use_pcm & 1) << 26, 0x04000000);
 				return 0;
 			} else if (!strcasecmp(node->tag, "file")) {
 				if (in_file)
@@ -304,15 +336,6 @@ int neogeo_romset_tx(char* name) {
 	if (!(system_type & 2))
 		neogeo_file_tx("", "sfix.sfix", NEO_FILE_FIX, 2, 0, 0x10000);
 	neogeo_file_tx("", "000-lo.lo", NEO_FILE_8BIT, 1, 0, 0x10000);
-	
-	if (!strcmp(romset, "ssideki") || !strcmp(romset, "fatfury2")) {
-		printf("Enabled PRO-CT0 protection chip\n");
-		user_io_8bit_set_status(0x01000000, 0x03000000);
-	} else if (!strcmp(romset, "ridhero")) {
-		printf("Enabled COM MCU for ridhero\n");
-		user_io_8bit_set_status(0x02000000, 0x03000000);
-	} else
-		user_io_8bit_set_status(0x00000000, 0x03000000);
 	
 	if (!strcmp(romset, "kof95")) {
 		printf("Enabled sprite gfx gap hack for kof95\n");

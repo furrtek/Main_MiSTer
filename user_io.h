@@ -200,6 +200,7 @@ char is_x86_core();
 char is_neogeo_core();
 char is_snes_core();
 char has_menu();
+void parse_cue_file();
 
 const char *get_image_name(int i);
 
