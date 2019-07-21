@@ -61,6 +61,7 @@ int FileReadSec(fileTYPE *file, void *pBuffer);
 int FileWriteAdv(fileTYPE *file, void *pBuffer, int length);
 int FileWriteSec(fileTYPE *file, void *pBuffer);
 
+int FileExists(const char *name);
 int FileCanWrite(const char *name);
 
 int FileReadLine(fileTYPE *file, char *pBuffer, int length);

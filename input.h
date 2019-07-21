@@ -52,4 +52,11 @@ uint32_t get_amiga_code(uint16_t key);
 uint32_t get_atari_code(uint16_t key);
 uint32_t get_archie_code(uint16_t key);
 
+int input_has_lightgun();
+void input_lightgun_cal(uint16_t *cal);
+
+void input_switch(int grab);
+int input_state();
+void input_uinp_destroy();
+
 #endif

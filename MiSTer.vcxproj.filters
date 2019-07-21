@@ -70,9 +70,6 @@
     <ClCompile Include="sxmlc.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="tzx2wav.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="user_io.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -142,6 +139,9 @@
     <ClCompile Include="scaler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="video.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="battery.h">
@@ -208,9 +208,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="sxmlc.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="tzx2wav.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="user_io.h">
@@ -283,6 +280,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="scaler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="video.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="lib\imlib2\Imlib2.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

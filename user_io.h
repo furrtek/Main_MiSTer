@@ -48,7 +48,7 @@
 #define UIO_SET_SDCONF  0x19  // send SD card configuration (CSD, CID)
 #define UIO_ASTICK      0x1a
 #define UIO_SIO_IN      0x1b  // serial in
-#define UIO_SET_SDSTAT  0x1c  // set sd card status 
+#define UIO_SET_SDSTAT  0x1c  // set sd card status
 #define UIO_SET_SDINFO  0x1d  // send info about mounted image
 #define UIO_SET_STATUS2 0x1e  // 32bit status
 #define UIO_GET_KBD_LED 0x1f  // keyboard LEDs control
@@ -67,6 +67,8 @@
 #define UIO_GET_VMODE   0x2C  // Get video mode parameters
 #define UIO_SET_VPOS    0x2D  // Set video positions
 #define UIO_GET_OSDMASK 0x2E  // Get mask
+#define UIO_SET_FBUF    0x2F  // Set frame buffer for HPS output
+#define UIO_WAIT_VSYNC  0x30  // Wait for VSync
 
 // codes as used by 8bit for file loading from OSD
 #define UIO_FILE_TX     0x53
@@ -104,7 +106,7 @@
 #define JOY_L3     0x4000
 #define JOY_R3     0x8000
 
-// keyboard LEDs control 
+// keyboard LEDs control
 #define KBD_LED_CAPS_CONTROL  0x01
 #define KBD_LED_CAPS_STATUS   0x02
 #define KBD_LED_CAPS_MASK     (KBD_LED_CAPS_CONTROL | KBD_LED_CAPS_STATUS)
@@ -117,20 +119,21 @@
 #define KBD_LED_FLAG_MASK     0xC0
 #define KBD_LED_FLAG_STATUS   0x40
 
-#define BUTTON1                 0b000000001
-#define BUTTON2                 0b000000010
-#define CONF_VGA_SCALER         0b000000100
-#define CONF_CSYNC              0b000001000
-#define CONF_FORCED_SCANDOUBLER 0b000010000
-#define CONF_YPBPR              0b000100000
-#define CONF_AUDIO_96K          0b001000000
-#define CONF_DVI                0b010000000
-#define CONF_HDMI_LIMITED       0b100000000
+#define BUTTON1                 0b0000000001
+#define BUTTON2                 0b0000000010
+#define CONF_VGA_SCALER         0b0000000100
+#define CONF_CSYNC              0b0000001000
+#define CONF_FORCED_SCANDOUBLER 0b0000010000
+#define CONF_YPBPR              0b0000100000
+#define CONF_AUDIO_96K          0b0001000000
+#define CONF_DVI                0b0010000000
+#define CONF_HDMI_LIMITED       0b0100000000
+#define CONF_VGA_SOG            0b1000000000
 
 // core type value should be unlikely to be returned by broken cores
 #define CORE_TYPE_UNKNOWN   0x55
 #define CORE_TYPE_DUMB      0xa0   // core without any io controller interaction
-#define CORE_TYPE_MIST      0xa3   // mist atari st core   
+#define CORE_TYPE_MIST      0xa3   // mist atari st core
 #define CORE_TYPE_8BIT      0xa4   // atari 800/c64 like core
 #define CORE_TYPE_MINIMIG2  0xa5   // new Minimig with AGA
 #define CORE_TYPE_ARCHIE    0xa6   // Acorn Archimedes
@@ -160,7 +163,7 @@
 #define UIO_PARITY_MARK  3
 #define UIO_PARITY_SPACE 4
 
-#define UIO_PRIORITY_KEYBOARD 0 
+#define UIO_PRIORITY_KEYBOARD 0
 #define UIO_PRIORITY_GAMEPAD  1
 
 #define EMU_NONE  0
@@ -168,7 +171,7 @@
 #define EMU_JOY0  2
 #define EMU_JOY1  3
 
-// serial status data type returned from the core 
+// serial status data type returned from the core
 typedef struct {
 	uint32_t bitrate;        // 300, 600 ... 115200
 	uint8_t datasize;        // 5,6,7,8 ...
@@ -214,7 +217,7 @@ uint32_t user_io_eth_get_status(void);
 void user_io_eth_send_rx_frame(uint8_t *, uint16_t);
 void user_io_eth_receive_tx_frame(uint8_t *, uint16_t);
 
-void user_io_mouse(unsigned char b, int16_t x, int16_t y);
+void user_io_mouse(unsigned char b, int16_t x, int16_t y, int16_t w);
 void user_io_kbd(uint16_t key, int press);
 char* user_io_create_config_name();
 int user_io_get_joy_transl();
@@ -224,7 +227,6 @@ void user_io_set_joyswap(int swap);
 int user_io_get_joyswap();
 char user_io_osd_is_visible();
 void user_io_send_buttons(char);
-void parse_video_mode();
 
 void user_io_set_index(unsigned char index);
 unsigned char user_io_ext_idx(char *, char*);
@@ -233,18 +235,8 @@ void user_io_check_reset(unsigned short modifiers, char useKeys);
 
 void user_io_rtc_reset();
 
-int hasAPI1_5();
-
 const char* get_rbf_dir();
 const char* get_rbf_name();
-
-int user_io_get_scaler_flt();
-char* user_io_get_scaler_coeff();
-void user_io_set_scaler_flt(int n);
-void user_io_set_scaler_coeff(char *name);
-
-void user_io_minimig_set_adjust(char n);
-char user_io_minimig_get_adjust();
 
 #define HomeDir (is_minimig() ? "Amiga" : is_archie() ? "Archie" : is_menu_core() ? "Scripts" : user_io_get_core_name())
 
@@ -257,5 +249,9 @@ int  get_volume();
 
 void user_io_store_filename(char *filename);
 int user_io_use_cheats();
+
+void diskled_on();
+#define DISKLED_ON  diskled_on()
+#define DISKLED_OFF void()
 
 #endif // USER_IO_H

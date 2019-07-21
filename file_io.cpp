@@ -11,6 +11,8 @@
 #include <ctype.h>
 #include <sys/vfs.h>
 #include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <sys/mount.h>
 #include <linux/magic.h>
 #include <algorithm>
 #include <vector>
@@ -25,6 +27,7 @@
 #include "input.h"
 #include "miniz_zip.h"
 #include "scheduler.h"
+#include "video.h"
 
 #define MIN(a,b) (((a)<(b)) ? (a) : (b))
 
@@ -194,10 +197,11 @@ static bool isPathRegularFile(char *path)
 
 int FileReadLine(fileTYPE *file, char *pBuffer, int length)
 {
-	char str[100];
 	int ret = 0;
 	char my_char;
 	int char_count;
+	(void)pBuffer;
+	(void)length;
 
 	if (file->filp)
 	{
@@ -209,7 +213,7 @@ int FileReadLine(fileTYPE *file, char *pBuffer, int length)
 
 			if (my_char!=0x20) {
 				//pBuffer[char_count] = my_char;
-				printf("%s", my_char);
+				printf("%s", (char)my_char);
 				char_count++;
 			}
 		}
@@ -358,12 +362,25 @@ int FileOpenEx(fileTYPE *file, const char *name, int mode, char mute)
 			}
 
 			file->size = st.st_size;
+			if (st.st_rdev && !st.st_size)  //for special files we need an ioctl call to get the correct size
+			{
+				unsigned long long blksize;
+				int ret = ioctl(fd, BLKGETSIZE64, &blksize);
+				if (ret < 0)
+				{
+					if (!mute) printf("FileOpenEx(ioctl) File:%s, error: %d.\n", full_path, ret);
+					FileClose(file);
+					return 0;
+				}
+				file->size = blksize;
+			}
+
 			file->offset = 0;
 			file->mode = mode;
 		}
 	}
 
-	//printf("opened %s, size %lu\n", full_path, file->size);
+	//printf("opened %s, size %llu\n", full_path, file->size);
 	return 1;
 }
 
@@ -372,8 +389,17 @@ __off64_t FileGetSize(fileTYPE *file)
 	if (file->filp)
 	{
 		struct stat64 st;
-		int ret = fstat64(fileno(file->filp), &st);
-		return (ret < 0) ? 0 : st.st_size;
+		if (fstat64(fileno(file->filp), &st) < 0) return 0;
+
+		if (st.st_rdev && !st.st_size)  //for special files we need an ioctl call to get the correct size
+		{
+			unsigned long long blksize;
+			int ret = ioctl(fileno(file->filp), BLKGETSIZE64, &blksize);
+			if (ret < 0) return 0;
+			return blksize;
+		}
+
+		return st.st_size;
 	}
 	else if (file->zip)
 	{
@@ -532,7 +558,9 @@ int FileWriteSec(fileTYPE *file, void *pBuffer)
 
 int FileSave(const char *name, void *pBuffer, int size)
 {
-	sprintf(full_path, "%s/%s", getRootDir(), name);
+	if(name[0] != '/') sprintf(full_path, "%s/%s", getRootDir(), name);
+	else strcpy(full_path, name);
+
 	int fd = open(full_path, O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, S_IRWXU | S_IRWXG | S_IRWXO);
 	if (fd < 0)
 	{
@@ -561,7 +589,9 @@ int FileSaveConfig(const char *name, void *pBuffer, int size)
 
 int FileLoad(const char *name, void *pBuffer, int size)
 {
-	sprintf(full_path, "%s/%s", getRootDir(), name);
+	if (name[0] != '/') sprintf(full_path, "%s/%s", getRootDir(), name);
+	else strcpy(full_path, name);
+
 	int fd = open(full_path, O_RDONLY);
 	if (fd < 0)
 	{
@@ -601,6 +631,12 @@ int FileLoadConfig(const char *name, void *pBuffer, int size)
 	char path[256] = { CONFIG_DIR"/" };
 	strcat(path, name);
 	return FileLoad(path, pBuffer, size);
+}
+
+int FileExists(const char *name)
+{
+	sprintf(full_path, "%s/%s", getRootDir(), name);
+	return !access(full_path, F_OK);
 }
 
 int FileCanWrite(const char *name)
@@ -803,7 +839,7 @@ void FindStorage(void)
 		device = 0;
 		MiSTer_ini_parse();
 		device = saveddev;
-		parse_video_mode();
+		video_mode_load();
 		user_io_send_buttons(1);
 
 		printf("Waiting for USB...\n");
@@ -1040,7 +1076,7 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 				de = &_de;
 			}
 			else
-			// Handle (possible) symbolic link type in the directory entry 
+			// Handle (possible) symbolic link type in the directory entry
 			if (de->d_type == DT_LNK || de->d_type == DT_REG)
 			{
 				sprintf(full_path+path_len, "/%s", de->d_name);
@@ -1100,6 +1136,7 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 					}
 
 					char *fext = strrchr(de->d_name, '.');
+					if(fext) fext++;
 					while(!found && *ext && fext)
 					{
 						char e[4];
@@ -1109,13 +1146,17 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 							e[2] = 0;
 							if (e[1] == ' ') e[1] = 0;
 						}
+
 						e[3] = 0;
 						found = 1;
-						for (int i = 0; i < 3; i++)
+						for (int i = 0; i < 4; i++)
 						{
 							if (e[i] == '*') break;
-							if (e[i] == '?' && fext[i+1]) continue;
-							if (tolower(e[i]) != tolower(fext[i + 1])) found = 0;
+							if (e[i] == '?' && fext[i]) continue;
+
+							if (tolower(e[i]) != tolower(fext[i])) found = 0;
+
+							if (!e[i] || !found) break;
 						}
 						if (found) break;
 

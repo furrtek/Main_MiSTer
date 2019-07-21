@@ -20,8 +20,8 @@ void neogeo_osd_progress(const char* name, unsigned int progress) {
 	progress = (progress * 18) >> 8;
 	if (progress >= 18) progress = 18;
 
-	// ##############################
-	// NNNNNNNNNNN-PPPPPPPPPPPPPPPPPP
+	// ############################## 30
+	// NNNNNNNNNNNNPPPPPPPPPPPPPPPPPP
 	memset(progress_buf, ' ', 30);
 	memcpy(progress_buf, name, strlen(name));
 	for (unsigned int i = 0; i < progress; i++)
@@ -54,10 +54,10 @@ int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_
 
 	FileSeek(&f, offset, SEEK_SET);
 
-	printf("Loading %s (offset %lu, size %lu, type %u) with index 0x%02X\n", name, offset, bytes2send, neo_file_type, index);
+	printf("Loading %s (offset %lu, size %lu, type %c) with index 0x%02X\n", name, offset, bytes2send, neo_file_type, index);
 
 	// Put pairs of bitplanes in the correct order for the core
-	if (neo_file_type == NEO_FILE_SPR) index ^= 1;
+	if (neo_file_type == 'C') index ^= 1;
 	// set index byte
 	user_io_set_index(index);
 
@@ -76,27 +76,29 @@ int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_
 		EnableFpga();
 		spi8(UIO_FILE_TX_DAT);
 
-		if (neo_file_type == NEO_FILE_RAW) {
+		if ((neo_file_type == 'P') || (neo_file_type == 'V')) {
+			// NEO_FILE_RAW
 			spi_write(buf, chunk, 1);
-		} else if (neo_file_type == NEO_FILE_8BIT) {
+		} else if (neo_file_type == 'M') {
+			// NEO_FILE_8BIT
 			spi_write(buf, chunk, 0);
 		} else {
 
-			if (neo_file_type == NEO_FILE_FIX)
-				fix_convert(buf, buf_out, sizeof(buf_out));
-			else if (neo_file_type == NEO_FILE_SPR)
-				spr_convert(buf, buf_out, sizeof(buf_out));
+			if (neo_file_type == 'S')
+				fix_convert(buf, buf_out, sizeof(buf_out));	// NEO_FILE_FIX
+			else if (neo_file_type == 'C')
+				spr_convert(buf, buf_out, sizeof(buf_out));	// NEO_FILE_SPR
 			
-			clock_gettime(CLOCK_REALTIME, &ts1);	// DEBUG PROFILING
+			//clock_gettime(CLOCK_REALTIME, &ts1);	// DEBUG PROFILING
 				spi_write(buf_out, chunk, 1);
-			clock_gettime(CLOCK_REALTIME, &ts2);	// DEBUG PROFILING
+			//clock_gettime(CLOCK_REALTIME, &ts2);	// DEBUG PROFILING
 
-			if (ts2.tv_nsec < ts1.tv_nsec) {	// DEBUG PROFILING
+			/*if (ts2.tv_nsec < ts1.tv_nsec) {	// DEBUG PROFILING
 				ts2.tv_nsec += 1000000000;
 				ts2.tv_sec--;
-			}
+			}*/
  
-			us_acc += ((ts2.tv_nsec - ts1.tv_nsec) / 1000);	// DEBUG PROFILING
+			//us_acc += ((ts2.tv_nsec - ts1.tv_nsec) / 1000);	// DEBUG PROFILING
 		}
 
 		DisableFpga();
@@ -106,7 +108,7 @@ int neogeo_file_tx(const char* romset, const char* name, unsigned char neo_file_
 	}
 
 	// DEBUG PROFILING
-	printf("Gfx spi_write us total: %09ld\n", us_acc);
+	// printf("Gfx spi_write us total: %09ld\n", us_acc);
 	// mslug all C ROMs:
 	// spr_convert: 37680*4 = 150720us = 0.150s
 	// spi_write: 2300766*4 = 9203064us = 9.2s !
@@ -191,15 +193,18 @@ static int xml_load_files(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, co
 	static char file_name[16 + 1] { "" };
 	static int in_correct_romset = 0;
 	static int in_file = 0;
-	static unsigned char file_index = 0;
+	static unsigned char file_bank = 0, file_index = 0;
 	static char file_type = 0;
 	static unsigned long int file_offset = 0, file_size = 0;
-	static unsigned char hw_type = 0, use_pcm = 0;
+	static unsigned char hw_type = 0, use_pcm = 0, romwait = 0, pwait = 0;
 
 	switch (evt)
 	{
 	case XML_EVENT_START_NODE:
 		if (!strcasecmp(node->tag, "romset")) {
+			hw_type = 0;
+			romwait = 0;
+			pwait = 0;
 			for (int i = 0; i < node->n_attributes; i++) {
 				if (!strcasecmp(node->attributes[i].name, "name")) {
 					if (!strcasecmp(node->attributes[i].value, romset)) {
@@ -208,33 +213,44 @@ static int xml_load_files(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, co
 					} else {
 						in_correct_romset = 0;
 					}
-				} else if (!strcasecmp(node->attributes[i].name, "hw")) {
-					hw_type = atoi(node->attributes[i].value);
-				} else if (!strcasecmp(node->attributes[i].name, "pcm")) {
-					use_pcm = atoi(node->attributes[i].value);
+				} else if (!strcasecmp(node->attributes[i].name, "config")) {
+					use_pcm = strstr(node->attributes[i].value, "pcm") ? 1 : 0;
+
+					if (strstr(node->attributes[i].value, "ct0")) {
+						hw_type = 1;
+					} else if (strstr(node->attributes[i].value, "com")) {
+						hw_type = 2;
+					} else if (strstr(node->attributes[i].value, "cmc")) {
+						hw_type = 3;
+					} else if (strstr(node->attributes[i].value, "cpld")) {
+						hw_type = 4;
+					}
+
+					if (strstr(node->attributes[i].value, "romwait")) {
+						romwait = 1;
+					} else if (strstr(node->attributes[i].value, "pwait0")) {
+						pwait = 1;
+					} else if (strstr(node->attributes[i].value, "pwait1")) {
+						pwait = 2;
+					}
 				}
 			}
 		}
 		if (in_correct_romset) {
 			if (!strcasecmp(node->tag, "file")) {
+
+				file_offset = 0;
+				in_file = 1;
+
 				for (int i = 0; i < node->n_attributes; i++) {
 					if (!strcasecmp(node->attributes[i].name, "name"))
 						strncpy(file_name, node->attributes[i].value, 16);
 
-					if (!strcasecmp(node->attributes[i].name, "type")) {
+					if (!strcasecmp(node->attributes[i].name, "type"))
 						file_type = *node->attributes[i].value;
-						if (file_type == 'S')
-							file_type = NEO_FILE_FIX;
-						else if (file_type == 'C')
-							file_type = NEO_FILE_SPR;
-						else if (file_type == 'M')
-							file_type = NEO_FILE_8BIT;
-						else
-							file_type = NEO_FILE_RAW;
-					}
 
-					if (!strcasecmp(node->attributes[i].name, "index"))
-						file_index = atoi(node->attributes[i].value);
+					if (!strcasecmp(node->attributes[i].name, "bank"))
+						file_bank = atoi(node->attributes[i].value);
 
 					if (!strcasecmp(node->attributes[i].name, "offset"))
 						file_offset = strtol(node->attributes[i].value, NULL, 0);
@@ -242,7 +258,27 @@ static int xml_load_files(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, co
 					if (!strcasecmp(node->attributes[i].name, "size"))
 						file_size = strtol(node->attributes[i].value, NULL, 0);
 				}
-				in_file = 1;
+				
+				// Make index from bank number and file type
+				// S1, M1: 2 banks								0000001x	2	3
+				// System ROMS: 4								000001xx	4	7		0
+				// 8MB max for P's in banks of 512kB: 16 banks	0001xxxx	16	31		8
+				// V: 32MB max in banks of 512kB: 64 banks		01xxxxxx	64	127		32
+				// C: 56MB max in banks of 512kB: 112 banks		1xxxxxxx	128	255		0
+				if (file_type == 'S')
+					file_index = 2;
+				else if (file_type == 'M')
+					file_index = 3;
+				else if (file_type == 'P')
+					file_index = 16 + (file_bank & 15);
+				else if (file_type == 'V')
+					file_index = 64 + (file_bank & 63);
+				else if (file_type == 'C')
+					file_index = 128 + (file_bank & 127);
+				else
+					in_file = 0;	// Ignore file if invalid type
+
+				printf("Type: %c, Index: %u", file_type, file_index);
 			}
 		}
 		break;
@@ -250,10 +286,13 @@ static int xml_load_files(XMLEvent evt, const XMLNode* node, SXML_CHAR* text, co
 	case XML_EVENT_END_NODE:
 		if (in_correct_romset) {
 			if (!strcasecmp(node->tag, "romset")) {
-					printf("Setting cart hardware type to %u\n", hw_type);
-					user_io_8bit_set_status(((uint32_t)hw_type & 3) << 24, 0x03000000);
-					printf("Setting cart to%s use the PCM chip\n", use_pcm ? "" : " not");
-					user_io_8bit_set_status(((uint32_t)use_pcm & 1) << 26, 0x04000000);
+				printf("Setting cart hardware type to %u\n", hw_type);
+				user_io_8bit_set_status(((uint32_t)hw_type & 3) << 24, 0x03000000);
+				printf("Setting cart to%s use the PCM chip\n", use_pcm ? "" : " not");
+				user_io_8bit_set_status(((uint32_t)use_pcm & 1) << 27, 0x08000000);
+				printf("Setting wait state config: ROMWAIT=%u PWAIT=%u\n", romwait, pwait);
+				user_io_8bit_set_status(((uint32_t)romwait & 1) << 16, 0x00010000);
+				user_io_8bit_set_status(((uint32_t)pwait & 3) << 17, 0x00060000);
 				return 0;
 			} else if (!strcasecmp(node->tag, "file")) {
 				if (in_file)
@@ -316,26 +355,26 @@ int neogeo_romset_tx(char* name) {
 			sprintf(full_path, "%s/neogeo/uni-bios.rom", getRootDir());
 			if (!stat64(full_path, &st)) {
 				// Autoload Unibios for cart systems if present
-				neogeo_file_tx("", "uni-bios.rom", NEO_FILE_RAW, 0, 0, 0x20000);
+				neogeo_file_tx("", "uni-bios.rom", 'P', 4, 0, 0x20000);
 			} else {
 				// Otherwise load normal system roms
 				if (system_type == 0)
-					neogeo_file_tx("", "neo-epo.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
+					neogeo_file_tx("", "neo-epo.sp1", 'P', 4, 0, 0x20000);
 				else
-					neogeo_file_tx("", "sp-s2.sp1", NEO_FILE_RAW, 0, 0, 0x20000);
+					neogeo_file_tx("", "sp-s2.sp1", 'P', 4, 0, 0x20000);
 			}
 		} else if (system_type == 2) {
 			// NeoGeo CD
-			neogeo_file_tx("", "top-sp1.bin", NEO_FILE_RAW, 0, 0, 0x80000);
+			neogeo_file_tx("", "top-sp1.bin", 'P', 4, 0, 0x80000);
 		} else {
 			// NeoGeo CDZ
-			neogeo_file_tx("", "neocd.bin", NEO_FILE_RAW, 0, 0, 0x80000);
+			neogeo_file_tx("", "neocd.bin", 'P', 4, 0, 0x80000);
 		}
 	}
 	
 	if (!(system_type & 2))
-		neogeo_file_tx("", "sfix.sfix", NEO_FILE_FIX, 2, 0, 0x10000);
-	neogeo_file_tx("", "000-lo.lo", NEO_FILE_8BIT, 1, 0, 0x10000);
+		neogeo_file_tx("", "sfix.sfix", 'S', 6, 0, 0x10000);
+	neogeo_file_tx("", "000-lo.lo", 'M', 5, 0, 0x10000);
 	
 	if (!strcmp(romset, "kof95")) {
 		printf("Enabled sprite gfx gap hack for kof95\n");
